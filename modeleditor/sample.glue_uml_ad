@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Glue:GlueDiagram xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:Glue="http://www.glueframework.com/activitydiagram/" id="0" location="20,20" size="100,100">
+  <child xsi:type="Glue:InitialState" id="0" location="192,24" size="-1,-1" output="//@wire.0"/>
+  <child xsi:type="Glue:FinalState" id="1" location="192,240" size="-1,-1" input="//@wire.5 //@wire.9 //@wire.11"/>
+  <child xsi:type="Glue:Activity" id="2" location="36,60" size="505,-1" input="//@wire.0" output="//@wire.5 //@wire.1 //@wire.2 //@wire.4 //@wire.3 //@wire.10" name="Router">
+    <property key="class" value="com.poscoict.glueframework.biz.activity.GlueDefaultRouter"/>
+    <property key="description" value="화면에서 발생되는 Event에 따라 분기하는 Activity입니다.&#xD;&#xA;GlueContext에는 find, delete, insert, update 중 한개의 정보가 있습니다. "/>
+  </child>
+  <child xsi:type="Glue:Activity" id="8" location="180,120" size="85,-1" input="//@wire.4" output="//@wire.7" name="등록">
+    <property key="class" value="com.poscoict.glueframework.biz.activity.GlueJdbcInsert"/>
+    <property key="chk-name" value="chk_insert"/>
+    <property key="dao" value="test-dao"/>
+    <property key="sql-key" value="sample.emp.insert"/>
+    <property key="param-count" value="4"/>
+    <property key="param0" value="empno_insert"/>
+    <property key="param1" value="ename_insert"/>
+    <property key="param2" value="sal_insert"/>
+    <property key="param3" value="deptno_insert"/>
+    <property key="result-key" value="insertCnt"/>
+    <property key="description" value="사원정보를 추가하는 Activity입니다. &#xD;&#xA;화면에서 입력한 정보(사원번호, 사원명, 급여, 부서번호)를 이용해 &#xD;&#xA;EMP Table에 record를 추가합니다. &#xD;&#xA;"/>
+  </child>
+  <child xsi:type="Glue:Activity" id="9" location="84,120" size="85,-1" input="//@wire.2" output="//@wire.6" name="삭제">
+    <property key="class" value="com.poscoict.glueframework.biz.activity.GlueJdbcDelete"/>
+    <property key="chk-name" value="chk"/>
+    <property key="dao" value="test-dao"/>
+    <property key="sql-key" value="sample.emp.delete"/>
+    <property key="param-count" value="1"/>
+    <property key="param0" value="EMPNO"/>
+    <property key="description" value="사원정보를 삭제하는 Activity입니다. &#xD;&#xA;result-key 를 설정하지 않았으므로, 삭제결과는 '{sql-key}_deleteCnt' 가 사용됩니다.&#xD;&#xA;"/>
+  </child>
+  <child xsi:type="Glue:Activity" id="10" location="276,120" size="85,-1" input="//@wire.3" output="//@wire.8" name="수정">
+    <property key="class" value="com.poscoict.glueframework.biz.activity.GlueJdbcModify"/>
+    <property key="chk-name" value="chk"/>
+    <property key="dao" value="test-dao"/>
+    <property key="param-count" value="3"/>
+    <property key="result-key" value="updateCnt"/>
+    <property key="sql-key" value="sample.emp.update"/>
+    <property key="param0" value="SAL"/>
+    <property key="param1" value="ENAME"/>
+    <property key="param2" value="EMPNO"/>
+    <property key="description" value=""/>
+  </child>
+  <child xsi:type="Glue:Activity" id="6152" location="36,180" size="325,-1" input="//@wire.1 //@wire.6 //@wire.7 //@wire.8" output="//@wire.9" name="Search[조회]">
+    <property key="class" value="com.poscoict.glueframework.biz.activity.GlueJdbcSearch"/>
+    <property key="dao" value="test-dao"/>
+    <property key="param-count" value="1"/>
+    <property key="result-key" value="EmpList"/>
+    <property key="sql-key" value="sample.emp.select"/>
+    <property key="param0" value="deptno"/>
+    <property key="description" value=""/>
+  </child>
+  <child xsi:type="Glue:Activity" id="6181" location="408,180" size="133,-1" input="//@wire.10" output="//@wire.11" name="SeachEmp-SQL">
+    <property key="class" value="sample.activity.SearchEmp"/>
+    <property key="description" value=""/>
+  </child>
+  <property key="test-tx" value="true"/>
+  <property key="description" value="GlueSDK에 포함된 예제 화면을 위한 Activity Diagram 입니다. &#xD;&#xA;sample-service는 사원정보를 관리하는 서비스입니다."/>
+  <wire id="0" guardcondition="success" firstRelativePoint="289,79" lastRelativePoint="289,142"/>
+  <wire id="1" guardcondition="find" firstRelativePoint="61,90" lastRelativePoint="61,216"/>
+  <wire id="3" guardcondition="delete" firstRelativePoint="126,90" lastRelativePoint="126,120"/>
+  <wire id="6" guardcondition="update" firstRelativePoint="316,90" lastRelativePoint="316,120"/>
+  <wire id="8" guardcondition="insert" firstRelativePoint="221,90" lastRelativePoint="221,120"/>
+  <wire id="13" guardcondition="success" firstRelativePoint="380,90" lastRelativePoint="211,249">
+    <bendpoint weight="0.5" firstDimension="92,172" secondDimension="178,-3"/>
+  </wire>
+  <wire id="88" guardcondition="success" firstRelativePoint="129,150" lastRelativePoint="129,180"/>
+  <wire id="89" guardcondition="success" firstRelativePoint="218,150" lastRelativePoint="218,180"/>
+  <wire id="90" guardcondition="success" firstRelativePoint="317,150" lastRelativePoint="317,180"/>
+  <wire id="91" guardcondition="success" firstRelativePoint="202,210" lastRelativePoint="202,239"/>
+  <wire id="95" guardcondition="custom" firstRelativePoint="481,90" lastRelativePoint="481,177"/>
+  <wire id="96" guardcondition="success" firstRelativePoint="479,210" lastRelativePoint="211,249">
+    <bendpoint weight="0.5" firstDimension="5,52" secondDimension="277,-3"/>
+  </wire>
+</Glue:GlueDiagram>

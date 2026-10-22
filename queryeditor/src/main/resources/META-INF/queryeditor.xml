@@ -1,0 +1,26 @@
+<idea-plugin>
+    <extensions defaultExtensionNs="com.intellij">
+        <fileType name="Glue SQL"
+                  language="XML"
+                  implementationClass="com.look4counter.queryeditor.GlueSqlFileType"
+                  fieldName="INSTANCE"
+                  extensions="glue_sql"/>
+        <fileEditorProvider implementation="com.look4counter.queryeditor.QueryDesignEditorProvider"/>
+        <fileEditorProvider implementation="com.look4counter.queryeditor.QuerySourceEditorProvider"/>
+        <applicationConfigurable id="com.look4counter.glueframework"
+                                 parentId="root" displayName="GlueFramework"
+                                 instance="com.look4counter.queryeditor.settings.GlueFrameworkConfigurable"/>
+        <projectConfigurable id="com.look4counter.glueframework.queryeditor"
+                             parentId="com.look4counter.glueframework" displayName="GlueQueryEditor"
+                             nonDefaultProject="true"
+                             instance="com.look4counter.queryeditor.settings.GlueQueryEditorConfigurable"/>
+    </extensions>
+    <applicationListeners>
+        <listener class="com.look4counter.queryeditor.QuerySaveListener"
+                  topic="com.intellij.openapi.fileEditor.FileDocumentManagerListener"/>
+    </applicationListeners>
+    <projectListeners>
+        <listener class="com.look4counter.queryeditor.QueryOpenListener"
+                  topic="com.intellij.openapi.fileEditor.FileEditorManagerListener"/>
+    </projectListeners>
+</idea-plugin>

@@ -1,0 +1,7 @@
+.gradle
+.idea
+.intellijPlatform
+build
+.gradle-user-home/
+.gradle-validation/
+.kotlin/

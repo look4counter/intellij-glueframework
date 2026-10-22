@@ -1,0 +1,11 @@
+<idea-plugin>
+    <extensions defaultExtensionNs="com.intellij">
+        <fileType name="Glue UML AD"
+                  language="XML"
+                  implementationClass="com.look4counter.modeleditor.GlueUmlAdFileType"
+                  fieldName="INSTANCE"
+                  extensions="glue_uml_ad"/>
+        <fileEditorProvider implementation="com.look4counter.modeleditor.ModelDesignEditorProvider"/>
+        <fileEditorProvider implementation="com.look4counter.modeleditor.ModelSourceEditorProvider"/>
+    </extensions>
+</idea-plugin>

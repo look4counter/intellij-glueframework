@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<queryMap desc="sample" xmlns="http://www.poscoict.com/glueframework/query">
+    <query id="sample.emp.select" desc="EMP 조회" resultType="" isNamed="false"><![CDATA[select EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, DEPTNO
+from EMP
+where DEPTNO=?]]></query>
+    <query id="sample.emp.select.vo" desc="EMP 조회" resultType="sample.vo.EmpVO" isNamed="false"><![CDATA[select EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, DEPTNO
+from EMP
+where DEPTNO=?]]></query>
+    <query id="sample.emp.select.named" desc="EMP 조회" resultType="" isNamed="true"><![CDATA[select EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, DEPTNO
+from EMP 
+where DEPTNO=:deptno]]></query>
+    <query id="sample.emp.select.named.vo" desc="EMP 조회" resultType="sample.vo.EmpVO" isNamed="true"><![CDATA[select EMPNO, ENAME, JOB, MGR, HIREDATE, SAL, DEPTNO
+from EMP 
+where DEPTNO=:deptno]]></query>
+    <query id="sample.emp.update" desc="EMP 수정" resultType="" isNamed="false"><![CDATA[update emp
+set sal=?, ename=?
+where empno=?]]></query>
+    <query id="sample.emp.delete" desc="EMP 삭제" resultType="" isNamed="false"><![CDATA[delete from emp
+where empno=?]]></query>
+    <query id="sample.emp.insert" desc="EMP 등록" resultType="" isNamed="false"><![CDATA[insert into emp(empno, ename, sal, deptno)
+values(?, ?, ?, ?)]]></query>
+</queryMap>

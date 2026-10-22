@@ -1,0 +1,8 @@
+DBeaver - Universal Database Manager
+Copyright (C) 2010-2025 DBeaver Corp and others
+
+The SQL keyword data in sql/dbeaver-keywords.txt is adapted from DBeaver SQLConstants.java.
+Source: https://github.com/dbeaver/dbeaver/blob/f2e25edd7d2eecd4d6541cdce70fdb25c7b07ea9/plugins/org.jkiss.dbeaver.model/src/org/jkiss/dbeaver/model/sql/SQLConstants.java
+Licensed under the Apache License, Version 2.0; see dbeaver-Apache-2.0.txt.
+Modifications: extracted four keyword arrays, resolved constants, removed duplicates, and sorted the data.
+No DBeaver runtime code is included.
