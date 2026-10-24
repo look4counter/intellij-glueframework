@@ -8,6 +8,7 @@ import javax.swing.Icon
 class GlueSqlFileType private constructor() : XmlLikeFileType(XMLLanguage.INSTANCE) {
     private val icon = IconLoader.getIcon("/icons/glueSql.svg", GlueSqlFileType::class.java)
     override fun getName(): String = "Glue SQL"
+    override fun getDisplayName(): String = name
     override fun getDescription(): String = "Glue SQL query file"
     override fun getDefaultExtension(): String = "glue_sql"
     override fun getIcon(): Icon = icon

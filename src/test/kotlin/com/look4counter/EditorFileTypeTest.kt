@@ -4,12 +4,22 @@ import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileTypes.FileTypeManager
 import com.intellij.lang.xml.XMLLanguage
+import com.intellij.ide.highlighter.XmlFileType
 import com.intellij.psi.xml.XmlFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.look4counter.modeleditor.GlueUmlAdFileType
 import com.look4counter.queryeditor.GlueSqlFileType
 
 class EditorFileTypeTest : BasePlatformTestCase() {
+    fun testFileTypeDisplayNamesAreUnique() {
+        val sql = GlueSqlFileType.INSTANCE
+        val uml = GlueUmlAdFileType.INSTANCE
+        assertEquals("Glue SQL", sql.displayName)
+        assertEquals("Glue UML AD", uml.displayName)
+        val displayNames = listOf(sql.displayName, uml.displayName, XmlFileType.INSTANCE.displayName)
+        assertEquals(displayNames.size, displayNames.toSet().size)
+    }
+
     fun testBothFileTypesUseXmlLanguageAndPsi() {
         for (extension in listOf("glue_sql", "glue_uml_ad")) {
             val file = myFixture.configureByText("example.$extension", "<root><child/></root>")
