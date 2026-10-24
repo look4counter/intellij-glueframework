@@ -14,7 +14,7 @@ import com.intellij.openapi.vfs.VirtualFile
 import org.jdom.Element
 
 class ModelSourceEditorProvider : FileEditorProvider, DumbAware {
-    override fun accept(project: Project, file: VirtualFile): Boolean = file.fileType == GlueUmlAdFileType.INSTANCE
+    override fun accept(project: Project, file: VirtualFile): Boolean = file.fileType == GlueUmlAdFileType.INSTANCE || ServiceDiagramAdapter.accepts(project, file)
 
     override fun createEditor(project: Project, file: VirtualFile): FileEditor =
         ModelSourceEditor(TextEditorProvider.getInstance().createEditor(project, file) as TextEditor)

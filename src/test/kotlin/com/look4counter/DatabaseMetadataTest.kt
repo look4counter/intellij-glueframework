@@ -68,34 +68,75 @@ class DatabaseMetadataTest : BasePlatformTestCase() {
         assertEquals(4, closed)
     }
 
-    fun testCacheSelectionInvalidationAndStaleRefresh() {
+    fun testAllSourcesDistinctInvalidationAndStaleRefresh() {
         val first = DataSourceDefinition("one", "One", "jdbc:postgresql://one/db")
         val second = DataSourceDefinition("two", "Two", "jdbc:mysql://two/db")
         settings.replaceDataSources(listOf(first, second))
         val service = DatabaseMetadataService.getInstance(project)
-        service.selectedId = "one"
         val snapshot = MetadataSnapshot(listOf(TableMetadata(null, null, "EMP", listOf("ID"))))
-        assertTrue(service.complete(service.beginRefresh()!!, snapshot))
-        assertEquals(snapshot, service.selectedSnapshot())
-        val stale = service.beginRefresh()!!
-        service.selectedId = "two"
-        assertFalse(service.complete(stale, snapshot))
-        assertNull(service.selectedSnapshot())
-        service.selectedId = "one"
-        assertEquals(snapshot, service.selectedSnapshot())
+        val requests = service.beginRefresh()
+        assertEquals(listOf("one", "two"), requests.map { it.source.id })
+        assertTrue(service.complete(requests[0], snapshot))
+        assertTrue(service.complete(requests[1], MetadataSnapshot(listOf(
+            TableMetadata(null, null, "EMP", listOf("ID", "NAME")),
+            TableMetadata(null, null, "DEPT", listOf("ID"))))))
+        assertEquals(listOf("DEPT", "EMP"), service.snapshot()!!.tableNames)
+        assertEquals(listOf("ID", "NAME"), service.snapshot()!!.columnNames)
         // A failed/canceled refresh never calls complete and retains the last successful snapshot.
         service.beginRefresh()
-        assertEquals(snapshot, service.selectedSnapshot())
-        val older = service.beginRefresh()!!
-        val newer = service.beginRefresh()!!
+        assertEquals(listOf("DEPT", "EMP"), service.snapshot()!!.tableNames)
+        val older = service.beginRefresh().first()
+        val newer = service.beginRefresh().first()
         assertFalse(service.complete(older, snapshot))
         assertTrue(service.complete(newer, snapshot))
         settings.replaceDataSources(listOf(first.copy(username = "changed"), second))
-        assertNull(service.selectedSnapshot())
+        assertNull(service.snapshot())
         assertFalse(service.complete(newer, snapshot))
         settings.replaceDataSources(listOf(second))
-        assertEquals("", service.selectedId)
-        assertNull(service.beginRefresh())
+        assertEquals(listOf("two"), service.beginRefresh().map { it.source.id })
+        settings.replaceDataSources(emptyList())
+        assertEmpty(service.beginRefresh())
+    }
+
+    fun testStartupWithoutEditorLoadsAllSourcesAndIsolatesFailures() {
+        val directory = java.nio.file.Files.createTempDirectory("glue-startup-driver")
+        val jar = directory.resolve("driver.jar")
+        try {
+            val resource = "com/look4counter/FixtureJdbcDriver.class"
+            java.util.jar.JarOutputStream(java.nio.file.Files.newOutputStream(jar)).use { output ->
+                output.putNextEntry(java.util.zip.ZipEntry(resource))
+                requireNotNull(javaClass.classLoader.getResourceAsStream(resource)).use { it.copyTo(output) }
+                output.closeEntry()
+            }
+            val good = DataSourceDefinition("one", "One", "jdbc:glue-test:public",
+                "com.look4counter.FixtureJdbcDriver", "", false, "POSTGRESQL", mutableListOf(jar.toString()))
+            settings.replaceDataSources(listOf(good.copy(id = "broken", driverClass = "missing.Driver"),
+                good, good.copy(id = "two")))
+            val service = DatabaseMetadataService.getInstance(project)
+            kotlinx.coroutines.runBlocking {
+                com.look4counter.queryeditor.database.DatabaseMetadataStartupActivity().execute(project)
+            }
+            com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching(
+                "startup metadata", { !service.loading && service.snapshot() != null }, 10)
+            assertEquals(1, service.failureCount)
+            assertEquals(listOf("EMP"), service.snapshot()!!.tableNames)
+            assertEquals(listOf("ID"), service.snapshot()!!.columnNames)
+            assertEquals(0, com.intellij.openapi.fileEditor.FileEditorManager.getInstance(project).openFiles.size)
+
+            settings.replaceDataSources(listOf(good.copy(id = "replacement")))
+            com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching(
+                "settings metadata", { !service.loading && service.snapshot() != null }, 10)
+            assertEquals(0, service.failureCount)
+            assertEquals(listOf("EMP"), service.snapshot()!!.tableNames)
+            settings.replaceDataSources(emptyList())
+            assertFalse(service.loading)
+            assertNull(service.snapshot())
+        } finally {
+            settings.replaceDataSources(emptyList())
+            listOf("glue.test.closed", "glue.test.deregistered").forEach(System::clearProperty)
+            java.nio.file.Files.deleteIfExists(jar)
+            java.nio.file.Files.delete(directory)
+        }
     }
 
     fun testLocalJarDriverConnectionPasswordCleanupAndFailure() {

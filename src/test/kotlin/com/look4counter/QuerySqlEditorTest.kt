@@ -242,16 +242,15 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
     fun testLightSyntaxCapture() = captureSql(false)
     fun testDarkSyntaxCapture() = captureSql(true)
 
-    fun testSelectedDatabaseMetadataCompletionIsDistinctAndInsertsIntoQuery() {
+    fun testAllDatabaseMetadataCompletionIsDistinctAndInsertsIntoQuery() {
         val settings = com.look4counter.queryeditor.settings.DataSourceSettingsService.getInstance(project)
         settings.replaceDataSources(listOf(com.look4counter.queryeditor.settings.DataSourceDefinition("one", "Local", "jdbc:postgresql://localhost/db")))
         val metadata = com.look4counter.queryeditor.database.DatabaseMetadataService.getInstance(project)
         try {
-            metadata.selectedId = "one"
             val snapshot = com.look4counter.queryeditor.database.MetadataSnapshot(listOf(
                 com.look4counter.queryeditor.database.TableMetadata(null, "public", "emp_table", listOf("emp_id", "emp_name", "emp_id")),
                 com.look4counter.queryeditor.database.TableMetadata(null, "other", "emp_table", listOf("emp_id", "SELECT"))))
-            metadata.complete(metadata.beginRefresh()!!, snapshot)
+            metadata.complete(metadata.beginRefresh().single(), snapshot)
             val field = openSql("select emp_")
             configureCompletion(field, field.text.length)
             val variants = myFixture.completeBasic()!!
@@ -263,17 +262,18 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
             assertEquals("select emp_id", field.text)
             val root = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
             assertTrue(root.text.contains("select emp_id"))
-            metadata.selectedId = ""
+            settings.replaceDataSources(emptyList())
             WriteCommandAction.runWriteCommandAction(project) { field.document.setText("emp_") }
             configureCompletion(field, 4)
             assertTrue(myFixture.completeBasic().isNullOrEmpty())
         } finally { settings.replaceDataSources(emptyList()) }
     }
 
-    fun testToolbarReadsLocalDriverAndReportsSafeFailureWithPreviousCache() {
+    fun testSettingsRefreshReadsLocalDriverAndEditorHasNoMetadataToolbar() {
         val directory = Files.createTempDirectory("glue-toolbar-driver")
         val jar = directory.resolve("driver.jar")
         val settings = com.look4counter.queryeditor.settings.DataSourceSettingsService.getInstance(project)
+        val configurable = com.look4counter.queryeditor.settings.GlueQueryEditorConfigurable(project)
         try {
             val resource = "com/look4counter/FixtureJdbcDriver.class"
             java.util.jar.JarOutputStream(Files.newOutputStream(jar)).use { output ->
@@ -285,24 +285,26 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
                 "toolbar", "Local", "jdbc:glue-test:public", "com.look4counter.FixtureJdbcDriver", "", false,
                 "POSTGRESQL", mutableListOf(jar.toString()))))
             openSql("select emp")
-            val controls = descendants(design!!.component).toList()
-            val combo = controls.filterIsInstance<javax.swing.JComboBox<*>>().single { it.name == "query.datasource" }
+            val editorControls = descendants(design!!.component).toList()
+            assertTrue(editorControls.none { it.name in setOf("query.datasource", "query.metadata.refresh", "query.metadata.status") })
+            val settingsComponent = configurable.createComponent()
+            configurable.reset()
+            val controls = descendants(settingsComponent).toList()
             val button = controls.filterIsInstance<javax.swing.JButton>().single { it.name == "query.metadata.refresh" }
             val status = controls.filterIsInstance<javax.swing.JLabel>().single { it.name == "query.metadata.status" }
-            combo.selectedIndex = 1
-            assertEquals("toolbar", settings.selectedDataSourceId)
             button.doClick()
             com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("metadata refresh", { button.isEnabled }, 10)
             assertEquals("테이블 1 · 컬럼 1", status.text)
             val metadata = com.look4counter.queryeditor.database.DatabaseMetadataService.getInstance(project)
-            assertEquals(listOf("EMP"), metadata.selectedSnapshot()!!.tableNames)
+            assertEquals(listOf("EMP"), metadata.snapshot()!!.tableNames)
             System.setProperty("glue.test.fail", "true")
             button.doClick()
             com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("failed metadata refresh", { button.isEnabled }, 10)
             assertTrue(status.text.startsWith("조회 실패"))
             assertFalse(status.text.contains("secret-value"))
-            assertEquals(listOf("EMP"), metadata.selectedSnapshot()!!.tableNames)
+            assertEquals(listOf("EMP"), metadata.snapshot()!!.tableNames)
         } finally {
+            configurable.disposeUIResources()
             settings.replaceDataSources(emptyList())
             listOf("glue.test.closed", "glue.test.deregistered", "glue.test.fail").forEach(System::clearProperty)
             Files.delete(jar)

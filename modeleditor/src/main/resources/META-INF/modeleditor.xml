@@ -1,5 +1,13 @@
 <idea-plugin>
     <extensions defaultExtensionNs="com.intellij">
+        <virtualFilePreCloseCheck implementation="com.look4counter.modeleditor.ModelServicePendingCloseCheck"/>
+        <fileDocumentManagerListener implementation="com.look4counter.modeleditor.ModelServiceSaveListener"/>
+        <notificationGroup id="Glue Model Service Export" displayType="BALLOON" isLogByDefault="true"/>
+        <projectConfigurable id="com.look4counter.glueframework.modeleditor"
+                             parentId="com.look4counter.glueframework" displayName="GlueModelEditor"
+                             nonDefaultProject="true" instance="com.look4counter.modeleditor.GlueModelEditorConfigurable"/>
+        <projectService serviceInterface="com.look4counter.modeleditor.ModelDiagramDialogs"
+                        serviceImplementation="com.look4counter.modeleditor.DefaultModelDiagramDialogs"/>
         <fileType name="Glue UML AD"
                   language="XML"
                   implementationClass="com.look4counter.modeleditor.GlueUmlAdFileType"

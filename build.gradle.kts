@@ -15,8 +15,8 @@ dependencies {
 
     // IntelliJ Platform Gradle Plugin Dependencies Extension - read more: https://plugins.jetbrains.com/docs/intellij/tools-intellij-platform-gradle-plugin-dependencies-extension.html
     intellijPlatform {
-        pluginComposedModule(project(":queryeditor"))
-        pluginComposedModule(project(":modeleditor"))
+        pluginComposedModule(implementation(project(":queryeditor")))
+        pluginComposedModule(implementation(project(":modeleditor")))
 
         intellijIdea("2025.3.6.1")
         bundledPlugin("com.intellij.java")

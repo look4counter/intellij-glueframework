@@ -5,16 +5,30 @@ import com.intellij.openapi.options.ConfigurationException
 import com.intellij.openapi.options.SearchableConfigurable
 import com.intellij.openapi.progress.ProgressManager
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.Disposable
+import com.intellij.openapi.util.Disposer
+import com.intellij.ui.components.JBPanel
+import java.awt.BorderLayout
 import java.util.Locale
 import javax.swing.JComponent
 
 open class GlueQueryEditorConfigurable(private val project: Project) : SearchableConfigurable, Configurable.NoScroll {
     private var panel: DataSourceSettingsPanel? = null
+    private var component: JComponent? = null
+    private var uiDisposable: Disposable? = null
     private val settings get() = DataSourceSettingsService.getInstance(project)
 
     override fun getId(): String = "com.look4counter.glueframework.queryeditor"
     override fun getDisplayName(): String = "GlueQueryEditor"
-    override fun createComponent(): JComponent = panel ?: DataSourceSettingsPanel().also { panel = it }
+    override fun createComponent(): JComponent = component ?: run {
+        val lifetime = Disposer.newDisposable("Datasource settings UI")
+        uiDisposable = lifetime
+        val settingsPanel = DataSourceSettingsPanel().also { panel = it }
+        JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            add(settingsPanel, BorderLayout.CENTER)
+            add(DataSourceMetadataToolbar(project, lifetime), BorderLayout.SOUTH)
+        }.also { component = it }
+    }
 
     override fun reset() {
         panel?.reset(settings.dataSources)
@@ -62,7 +76,10 @@ open class GlueQueryEditorConfigurable(private val project: Project) : Searchabl
     }
 
     override fun disposeUIResources() {
+        uiDisposable?.let { Disposer.dispose(it) }
+        uiDisposable = null
         panel?.clear()
         panel = null
+        component = null
     }
 }

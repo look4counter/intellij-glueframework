@@ -1,5 +1,7 @@
 <idea-plugin>
     <extensions defaultExtensionNs="com.intellij">
+        <postStartupActivity implementation="com.look4counter.queryeditor.queryindex.QueryIdIndexStartupActivity"/>
+        <postStartupActivity implementation="com.look4counter.queryeditor.database.DatabaseMetadataStartupActivity"/>
         <fileType name="Glue SQL"
                   language="XML"
                   implementationClass="com.look4counter.queryeditor.GlueSqlFileType"

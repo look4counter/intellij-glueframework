@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Glue:GlueDiagram xmi:version="2.0" xmlns:xmi="http://www.omg.org/XMI" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:Glue="http://www.glueframework.com/activitydiagram/" id="64" location="20,20" size="100,100">
+  <child xsi:type="Glue:InitialState" id="6127" location="199,27" size="-1,-1" output="//@wire.0"/>
+  <child xsi:type="Glue:FinalState" id="6128" location="392,258" size="-1,-1" input="//@wire.8 //@wire.7"/>
+  <child xsi:type="Glue:Activity" id="6129" location="72,72" size="421,-1" input="//@wire.0" output="//@wire.7 //@wire.1 //@wire.2 //@wire.3 //@wire.9" name="분기[Router]">
+    <property key="class" value="com.poscoict.glueframework.biz.activity.GlueDefaultRouter"/>
+  </child>
+  <child xsi:type="Glue:Activity" id="6140" location="72,132" size="97,-1" input="//@wire.1" output="//@wire.4" name="삭제[Delete]">
+    <property key="class" value="com.poscoict.glueframework.biz.activity.mybatis.GlueMybatisDelete"/>
+    <property key="chk-name" value="chk"/><property key="dao" value="test-dao"/><property key="result-key" value="deleteCnt"/>
+    <property key="sql-key" value="emp.mapper.deleteEmp"/><property key="param-bindings" value="empno=EMPNO"/><property key="description" value=""/>
+  </child>
+  <child xsi:type="Glue:Activity" id="6142" location="180,132" size="97,-1" input="//@wire.2" output="//@wire.5" name="등록[Insert]">
+    <property key="class" value="com.poscoict.glueframework.biz.activity.mybatis.GlueMybatisInsert"/>
+    <property key="chk-name" value="chk"/><property key="dao" value="test-dao"/><property key="result-key" value="insertCnt"/>
+    <property key="sql-key" value="emp.mapper.insertEmp"/><property key="param-bindings" value="empno=empno_insert|ename=ename_insert|sal=sal_insert|deptno=deptno_insert"/><property key="description" value=""/>
+  </child>
+  <child xsi:type="Glue:Activity" id="6143" location="288,132" size="97,-1" input="//@wire.3" output="//@wire.6" name="수정[Modify]">
+    <property key="class" value="com.poscoict.glueframework.biz.activity.mybatis.GlueMybatisModify"/>
+    <property key="chk-name" value="chk"/><property key="dao" value="test-dao"/><property key="result-key" value="updateCnt"/>
+    <property key="sql-key" value="emp.mapper.updateEmp"/><property key="param-bindings" value="empno=EMPNO|ename=ENAME|sal=SAL"/><property key="description" value=""/>
+  </child>
+  <child xsi:type="Glue:Activity" id="6144" location="72,192" size="370,-1" input="//@wire.4 //@wire.5 //@wire.6 //@wire.9" output="//@wire.8" name="조회[Search]">
+    <property key="class" value="com.poscoict.glueframework.biz.activity.mybatis.GlueMybatisSearch"/>
+    <property key="dao" value="test-dao"/><property key="result-key" value="empList"/><property key="sql-key" value="emp.mapper.getEmp"/>
+    <property key="param-bindings" value="deptno=deptno"/><property key="description" value=""/>
+  </child>
+  <property key="test-tx" value="true"/><property key="description" value=""/>
+  <wire id="79" guardcondition="success" firstRelativePoint="204,46" lastRelativePoint="204,72"/>
+  <wire id="80" guardcondition="delete" firstRelativePoint="120,102" lastRelativePoint="120,132"/>
+  <wire id="81" guardcondition="insert" firstRelativePoint="229,102" lastRelativePoint="229,132"/>
+  <wire id="82" guardcondition="update" firstRelativePoint="337,102" lastRelativePoint="337,132"/>
+  <wire id="83" guardcondition="success" firstRelativePoint="122,162" lastRelativePoint="122,192"/>
+  <wire id="84" guardcondition="success" firstRelativePoint="227,162" lastRelativePoint="227,192"/>
+  <wire id="85" guardcondition="success" firstRelativePoint="336,162" lastRelativePoint="336,192"/>
+  <wire id="86" guardcondition="success" firstRelativePoint="463,102" lastRelativePoint="411,267">
+    <bendpoint weight="0.5" firstDimension="181,178" secondDimension="61,-3"/>
+  </wire>
+  <wire id="87" guardcondition="success" firstRelativePoint="226,222" lastRelativePoint="226,251"/>
+  <wire id="112" guardcondition="find" firstRelativePoint="417,102" lastRelativePoint="417,192"/>
+</Glue:GlueDiagram>

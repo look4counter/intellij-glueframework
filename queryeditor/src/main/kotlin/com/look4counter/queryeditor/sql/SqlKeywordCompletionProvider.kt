@@ -36,7 +36,7 @@ internal class SqlKeywordCompletionProvider(private val project: Project) : Text
                 names.filter { it.startsWith(prefix, ignoreCase = true) }.forEach { candidates.getOrPut(it) { linkedSetOf() }.add(kind) }
             }
             add(SqlKeywords.words, "SQL 키워드")
-            DatabaseMetadataService.getInstance(project).selectedSnapshot()?.let {
+            DatabaseMetadataService.getInstance(project).snapshot()?.let {
                 add(it.tableNames, "테이블")
                 add(it.columnNames, "컬럼")
             }

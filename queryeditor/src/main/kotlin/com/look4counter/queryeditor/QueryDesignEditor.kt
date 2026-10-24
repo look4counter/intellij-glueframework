@@ -30,7 +30,6 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import com.look4counter.queryeditor.sql.SqlDocuments
-import com.look4counter.queryeditor.database.QueryDataSourceToolbar
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.Component
@@ -47,7 +46,8 @@ import javax.swing.ListSelectionModel
 import javax.swing.event.DocumentEvent as SwingDocumentEvent
 import javax.swing.event.DocumentListener as SwingDocumentListener
 
-internal class QueryDesignEditor(private val project: Project, private val file: VirtualFile) : UserDataHolderBase(), FileEditor {
+internal class QueryDesignEditor(private val project: Project, private val file: VirtualFile) : UserDataHolderBase(), FileEditor,
+    QueryEditorNavigation, com.intellij.openapi.fileEditor.NavigatableFileEditor {
     private val model = QueryMapDocumentModel(project, file)
     private val changes = PropertyChangeSupport(this)
     private val queryModel = DefaultListModel<QueryEntry>()
@@ -105,7 +105,6 @@ internal class QueryDesignEditor(private val project: Project, private val file:
         splitter.secondComponent = sidebar
         Disposer.register(this) { splitter.dispose() }
         panel.preferredSize = JBUI.size(1066, 600)
-        panel.add(QueryDataSourceToolbar(project, this), BorderLayout.NORTH)
         panel.add(splitter, BorderLayout.CENTER)
         panel.add(status, BorderLayout.SOUTH)
 
@@ -256,8 +255,11 @@ internal class QueryDesignEditor(private val project: Project, private val file:
             queryModel.clear()
             snapshot.queries.forEach(queryModel::addElement)
             if (snapshot.queries.isNotEmpty()) {
-                val matching = if (target == null) -1 else snapshot.queries.indexOfFirst { it.target.element == target }
+                val requested = file.getUserData(QueryNavigation.requestedQuery)
+                val requestedIndex = if (requested == null) -1 else snapshot.queries.indexOfFirst { it.id == requested }
+                val matching = if (requestedIndex >= 0) requestedIndex else if (target == null) -1 else snapshot.queries.indexOfFirst { it.target.element == target }
                 queryList.selectedIndex = if (matching >= 0) matching else oldIndex.coerceAtMost(snapshot.queries.lastIndex)
+                if (requestedIndex >= 0) file.putUserData(QueryNavigation.requestedQuery, null)
             }
             selected = queryList.selectedValue
             val query = selected
@@ -318,6 +320,31 @@ internal class QueryDesignEditor(private val project: Project, private val file:
     override fun getPreferredFocusedComponent(): JComponent = sqlEditor
     override fun getName(): String = "Design"
     override fun getFile(): VirtualFile = file
+    override fun selectQuery(id: String): Boolean {
+        if (disposed || project.isDisposed) return false
+        flushPending()
+        refresh()
+        val index = (0 until queryModel.size()).firstOrNull { queryModel.getElementAt(it).id == id } ?: return false
+        queryList.selectedIndex = index
+        queryList.ensureIndexIsVisible(index)
+        return true
+    }
+    override fun selectQueryAtOffset(offset: Int): Boolean {
+        if (disposed || project.isDisposed) return false
+        PsiDocumentManager.getInstance(project).commitDocument(model.document)
+        val tag = QueryNavigation.queryAtOffset(project, file, offset) ?: return false
+        return selectQuery(com.intellij.openapi.util.text.StringUtil.unescapeXmlEntities(tag.getAttributeValue("id").orEmpty()))
+    }
+    override fun canNavigateTo(target: com.intellij.pom.Navigatable): Boolean {
+        val descriptor = target as? com.intellij.openapi.fileEditor.OpenFileDescriptor ?: return false
+        return descriptor.file == file && com.intellij.openapi.application.ReadAction.compute<Boolean, RuntimeException> {
+            QueryNavigation.queryAtOffset(project, file, descriptor.offset) != null
+        }
+    }
+    override fun navigateTo(target: com.intellij.pom.Navigatable) {
+        val descriptor = target as? com.intellij.openapi.fileEditor.OpenFileDescriptor ?: return
+        if (descriptor.file == file) selectQueryAtOffset(descriptor.offset)
+    }
     override fun setState(state: FileEditorState) = Unit
     override fun selectNotify() {
         scheduleRefresh()
