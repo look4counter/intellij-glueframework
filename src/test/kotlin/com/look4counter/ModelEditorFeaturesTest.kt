@@ -7,13 +7,25 @@ import java.awt.event.MouseEvent
 import java.awt.event.MouseWheelEvent
 
 class ModelEditorFeaturesTest : BasePlatformTestCase() {
-    fun testWireCreationToEmptySpaceHasNoMagnetBendsAndTargetPreviewMatchesCreation() {
+    private var previousSnap = false
+
+    override fun setUp() {
+        super.setUp()
+        previousSnap = ModelSnapSettings.getInstance().enabled
+        ModelSnapSettings.getInstance().enabled = false
+    }
+
+    override fun tearDown() {
+        try { ModelSnapSettings.getInstance().enabled = previousSnap } finally { super.tearDown() }
+    }
+
+    fun testWireCreationToEmptySpaceHasNoSnapBendsAndTargetPreviewMatchesCreation() {
         val a = activity()
         val state = DiagramNode(DiagramNodeKind.FinalState, "2", "", DiagramPoint(320.0, 200.0), 20.0, 20.0)
-        for (magnet in listOf(false, true)) {
+        for (snap in listOf(false, true)) {
             val canvas = ModelDiagramCanvas().apply {
                 display(ModelDiagram(listOf(a, state), emptyList())); setSize(600, 400)
-                wireMagnetEnabled = magnet
+                snapEnabled = snap
                 setWireCreationMode(true)
             }
             fun click(x: Int, y: Int) {
@@ -102,13 +114,13 @@ class ModelEditorFeaturesTest : BasePlatformTestCase() {
         assertEmpty(canvas.selectedNodes)
     }
 
-    fun testExistingBendpointMagnetUsesStartAndEndActivityRanges() {
+    fun testExistingBendpointSnapUsesStartAndEndActivityRanges() {
         val a = activity()
         val b = a.copy(id = "2", location = DiagramPoint(20.0, 240.0))
         val bend = DiagramPoint(150.0, 155.0)
         val wire = DiagramWire(0, "3", "", a, b, null, null, listOf(DiagramBendpoint(
             DiagramPoint(bend.x - a.center.x, bend.y - a.center.y), DiagramPoint(bend.x - b.center.x, bend.y - b.center.y), 0.5)))
-        val canvas = ModelDiagramCanvas().apply { display(ModelDiagram(listOf(a, b), listOf(wire))); wireMagnetEnabled = true }
+        val canvas = ModelDiagramCanvas().apply { display(ModelDiagram(listOf(a, b), listOf(wire))); snapEnabled = true }
         mouse(canvas, MouseEvent.MOUSE_PRESSED, 150, 110)
         mouse(canvas, MouseEvent.MOUSE_RELEASED, 150, 110)
         mouse(canvas, MouseEvent.MOUSE_PRESSED, 150, 155)
@@ -119,23 +131,44 @@ class ModelEditorFeaturesTest : BasePlatformTestCase() {
         canvas.cancelDrag()
         assertEquals(wire, canvas.diagram.wires.single())
     }
-    fun testMiddleWireHandleUsesMagnetAndBendpointStaysFreeOutsideNodeRanges() {
-        for (magnet in listOf(false, true)) {
+    fun testMiddleWireHandleUsesSnapAndBendpointStaysFreeOutsideNodeRanges() {
+        for (snap in listOf(false, true)) {
             val a = activity().copy(outputs = listOf(0))
             val b = a.copy(id = "2", location = DiagramPoint(20.0, 240.0), outputs = emptyList(), inputs = listOf(0))
             val wire = DiagramWire(0, "3", "", a, b, null, null, emptyList())
-            val canvas = ModelDiagramCanvas().apply { display(ModelDiagram(listOf(a, b), listOf(wire))); wireMagnetEnabled = magnet }
+            val canvas = ModelDiagramCanvas().apply { display(ModelDiagram(listOf(a, b), listOf(wire))); snapEnabled = snap }
             mouse(canvas, MouseEvent.MOUSE_PRESSED, 120, 155)
             mouse(canvas, MouseEvent.MOUSE_RELEASED, 120, 155)
             mouse(canvas, MouseEvent.MOUSE_PRESSED, 120, 155)
             mouse(canvas, MouseEvent.MOUSE_DRAGGED, 142, 155)
-            assertEquals(if (magnet) 150.0 else 142.0, canvas.wirePath(canvas.diagram.wires.single()).first().x)
+            assertEquals(if (snap) 150.0 else 142.0, canvas.wirePath(canvas.diagram.wires.single()).first().x)
             canvas.cancelDrag()
             assertEquals(wire, canvas.diagram.wires.single())
         }
         val wire = DiagramWire(0, "3", "", activity(), activity().copy(id = "2", location = DiagramPoint(20.0, 240.0)), null, null, emptyList())
-        assertEquals(DiagramPoint(500.0, 400.0), WireMagnet.dragPosition(wire, DiagramPoint(500.0, 400.0)))
-        assertEquals(DiagramPoint(150.0, 155.0), WireMagnet.dragPosition(wire, DiagramPoint(142.0, 155.0)))
+        assertEquals(DiagramPoint(500.0, 400.0), WireSnap.dragPosition(wire, DiagramPoint(500.0, 400.0)))
+        assertEquals(DiagramPoint(150.0, 155.0), WireSnap.dragPosition(wire, DiagramPoint(142.0, 155.0)))
+    }
+
+    fun testActivitySnapUsesNearestOfBothOffsetGrids() {
+        val a = activity()
+        val b = a.copy(id = "2", location = DiagramPoint(30.0, 240.0))
+        for (bends in listOf(emptyList(), listOf(DiagramBendpoint(
+            DiagramPoint(30.0, 100.0), DiagramPoint(20.0, -100.0), 0.5)))) {
+            val wire = DiagramWire(0, "3", "", a, b, null, null, bends)
+            assertEquals(DiagramPoint(150.0, 155.0),
+                WireSnap.dragPosition(wire, DiagramPoint(152.0, 155.0)))
+            assertEquals(DiagramPoint(160.0, 155.0),
+                WireSnap.dragPosition(wire, DiagramPoint(158.0, 155.0)))
+            assertEquals(DiagramPoint(220.0, 155.0),
+                WireSnap.dragPosition(wire, DiagramPoint(220.0, 155.0)))
+            assertEquals(DiagramPoint(500.0, 400.0),
+                WireSnap.dragPosition(wire, DiagramPoint(500.0, 400.0)))
+        }
+        val side = b.copy(location = DiagramPoint(300.0, 45.0))
+        val horizontal = DiagramWire(0, "3", "", a, side, null, null, emptyList())
+        assertEquals(DiagramPoint(270.0, 60.0),
+            WireSnap.dragPosition(horizontal, DiagramPoint(270.0, 58.0)))
     }
 
     fun testRootHudHidesDescriptionAndUsesEquals() {
@@ -151,20 +184,20 @@ class ModelEditorFeaturesTest : BasePlatformTestCase() {
         image.createGraphics().let { try { canvas.paint(it) } finally { it.dispose() } }
         return image
     }
-    fun testWireEndpointUsesMagnetOnlyWhenEnabled() {
-        for (magnet in listOf(false, true)) {
+    fun testWireEndpointUsesSnapOnlyWhenEnabled() {
+        for (snap in listOf(false, true)) {
             val a = activity().copy(outputs = listOf(0))
             val b = a.copy(id = "2", location = DiagramPoint(20.0, 240.0), outputs = emptyList(), inputs = listOf(0))
             val wire = DiagramWire(0, "3", "", a, b, null, null, emptyList())
-            val canvas = ModelDiagramCanvas().apply { display(ModelDiagram(listOf(a, b), listOf(wire))); wireMagnetEnabled = magnet }
+            val canvas = ModelDiagramCanvas().apply { display(ModelDiagram(listOf(a, b), listOf(wire))); snapEnabled = snap }
             mouse(canvas, MouseEvent.MOUSE_PRESSED, 120, 155)
             mouse(canvas, MouseEvent.MOUSE_RELEASED, 120, 155)
             assertNotNull(canvas.selectedWire)
             mouse(canvas, MouseEvent.MOUSE_PRESSED, 120, 70)
             mouse(canvas, MouseEvent.MOUSE_DRAGGED, 142, 45)
-            assertEquals(if (magnet) 150.0 else 142.0, canvas.wirePath(canvas.diagram.wires.single()).first().x)
+            assertEquals(if (snap) 150.0 else 142.0, canvas.wirePath(canvas.diagram.wires.single()).first().x)
             mouse(canvas, MouseEvent.MOUSE_RELEASED, 142, 45)
-            assertEquals(if (magnet) 150.0 else 142.0, canvas.wirePath(canvas.diagram.wires.single()).first().x)
+            assertEquals(if (snap) 150.0 else 142.0, canvas.wirePath(canvas.diagram.wires.single()).first().x)
         }
     }
     fun testRangeBoxIsTranslucentSkyBlueAndRootPropertyHudRenders() {
@@ -185,7 +218,7 @@ class ModelEditorFeaturesTest : BasePlatformTestCase() {
         canvas.cancelDrag()
         assertNull(canvas.selectionBox)
     }
-    fun testEditorViewportHasNoScrollbarsAndToolbarMagnetChangesCanvasState() {
+    fun testEditorViewportHasNoScrollbarsAndToolbarSnapChangesCanvasState() {
         val file = myFixture.addFileToProject("features.glue_uml_ad", """<GlueDiagram xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
             <child xsi:type="Activity" id="1" name="Far" location="5000,5000" size="100,-1"/></GlueDiagram>""").virtualFile
         val editor = ModelDesignEditorProvider().createEditor(project, file)
@@ -198,11 +231,12 @@ class ModelEditorFeaturesTest : BasePlatformTestCase() {
             assertFalse(scroll.horizontalScrollBar.isVisible)
             assertEquals(scroll.viewport.extentSize, canvas.size)
             val toolbar = editor.component.components.filterIsInstance<ChildCreationToolbar>().single()
-            val event = com.intellij.openapi.actionSystem.AnActionEvent.createFromAnAction(toolbar.magnetAction, null,
+            val event = com.intellij.openapi.actionSystem.AnActionEvent.createFromAnAction(toolbar.snapAction, null,
                 com.intellij.openapi.actionSystem.ActionPlaces.UNKNOWN, com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT)
-            assertFalse(canvas.wireMagnetEnabled)
-            toolbar.magnetAction.setSelected(event, true)
-            assertTrue(canvas.wireMagnetEnabled)
+            assertFalse(canvas.snapEnabled)
+            assertEquals("Snap", toolbar.snapAction.templatePresentation.text)
+            toolbar.snapAction.setSelected(event, true)
+            assertTrue(canvas.snapEnabled)
         } finally { com.intellij.openapi.util.Disposer.dispose(editor) }
     }
     private fun activity() = DiagramNode(DiagramNodeKind.Activity, "1", "A", DiagramPoint(20.0, 40.0), 200.0, 30.0)
@@ -215,16 +249,16 @@ class ModelEditorFeaturesTest : BasePlatformTestCase() {
         assertEquals("A & B", diagram.properties[0].value)
         assertEquals("first\nsecond", diagram.properties[1].value)
     }
-    fun testMagnetUsesCenterThirtyUnitGridAndInset() {
+    fun testSnapUsesCenterThirtyUnitGridAndInset() {
         val a = activity()
-        assertEquals(DiagramPoint(150.0, 55.0), WireMagnet.position(a, DiagramPoint(142.0, 42.0)))
-        assertEquals(DiagramPoint(120.0, 55.0), WireMagnet.position(a, DiagramPoint(118.0, 68.0)))
-        assertEquals(DiagramPoint(210.0, 55.0), WireMagnet.position(a, DiagramPoint(219.0, 50.0)))
+        assertEquals(DiagramPoint(150.0, 55.0), WireSnap.position(a, DiagramPoint(142.0, 42.0)))
+        assertEquals(DiagramPoint(120.0, 55.0), WireSnap.position(a, DiagramPoint(118.0, 68.0)))
+        assertEquals(DiagramPoint(210.0, 55.0), WireSnap.position(a, DiagramPoint(219.0, 50.0)))
         val narrow = a.copy(width = 16.0)
-        assertEquals(narrow.center, WireMagnet.position(narrow, DiagramPoint(20.0, 40.0)))
+        assertEquals(narrow.center, WireSnap.position(narrow, DiagramPoint(20.0, 40.0)))
         val state = a.copy(kind = DiagramNodeKind.InitialState, width = 20.0, height = 20.0)
         val mouse = DiagramPoint(25.0, 43.0)
-        assertEquals(mouse, WireMagnet.position(state, mouse))
+        assertEquals(mouse, WireSnap.position(state, mouse))
     }
     fun testWheelAndControlWheelNavigateWithoutMovingDiagram() {
         val canvas = ModelDiagramCanvas().apply { display(ModelDiagram(listOf(activity()), emptyList())); setSize(600, 400) }
@@ -237,11 +271,11 @@ class ModelEditorFeaturesTest : BasePlatformTestCase() {
         assertEquals(DiagramPoint(-60.0, -60.0), canvas.pan)
         assertEquals(original, canvas.diagram)
     }
-    fun testActivityStateMagnetKeepsSnappedContactInSerializableBendpointGeometry() {
+    fun testActivityStateSnapKeepsSnappedContactInSerializableBendpointGeometry() {
         val a = activity()
         val state = a.copy(kind = DiagramNodeKind.FinalState, id = "2", location = DiagramPoint(130.0, 200.0), width = 20.0, height = 20.0)
         val wire = DiagramWire(0, "3", "", a, state, DiagramPoint(150.0, 55.0), null, emptyList())
-        val snapped = WireMagnet.attach(wire, true, DiagramPoint(150.0, 55.0))
+        val snapped = WireSnap.attach(wire, true, DiagramPoint(150.0, 55.0))
         assertEquals(150.0, DiagramGeometry.path(snapped).first().x)
         assertEquals(70.0, DiagramGeometry.path(snapped).first().y)
         assertEquals(state, snapped.end)

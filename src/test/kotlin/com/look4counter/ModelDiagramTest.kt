@@ -87,6 +87,85 @@ class ModelDiagramTest : BasePlatformTestCase() {
         }
     }
 
+    fun testResizeKeepsDirectWireContactWhenNoPreferredPointWasStored() {
+        val a = activity(20.0, 40.0)
+        val b = activity(20.0, 160.0)
+        val original = wire(a, b).copy(firstRelativePoint = null)
+        val path = DiagramGeometry.path(original)
+        for (node in listOf(a, b)) for (left in listOf(false, true)) for (delta in listOf(-20.0, 40.0)) {
+            val resized = node.copy(width = node.width + delta,
+                location = if (left) node.location + DiagramPoint(-delta, 0.0) else node.location)
+            val edited = DiagramEdits.relocateNodes(original, mapOf(node to resized))
+            assertEquals(path, DiagramGeometry.path(edited))
+            assertEquals(path.first(), edited.firstRelativePoint)
+            assertEmpty(edited.bendpoints)
+        }
+    }
+
+    fun testResizeRebasesBothRelativeVectorsWithoutMovingAbsoluteBends() {
+        val a = activity(20.0, 40.0)
+        for (b in listOf(activity(220.0, 160.0), state(220.0, 160.0))) {
+            for (count in 0..4) {
+                val bends = (0 until count).map { i -> DiagramBendpoint(
+                    DiagramPoint(110.0 + i * 10, 65.0 + i * 20),
+                    DiagramPoint(-90.0 + i * 15, -45.0 + i * 10), 0.1 + i * 0.2) }
+                val original = wire(a, b, bends)
+                val absolute = DiagramGeometry.path(original).drop(1).dropLast(1)
+                for (left in listOf(false, true)) for (delta in listOf(-20.0, 40.0)) {
+                    val resizedA = a.copy(width = a.width + delta,
+                        location = if (left) a.location + DiagramPoint(-delta, 0.0) else a.location)
+                    val resizedB = if (b.isActivity) b.copy(width = b.width + delta,
+                        location = if (left) b.location + DiagramPoint(-delta, 0.0) else b.location) else b
+                    val variants = listOf(mapOf(a to resizedA), mapOf(b to resizedB), mapOf(a to resizedA, b to resizedB))
+                    for (edits in variants) {
+                        val edited = DiagramEdits.relocateNodes(original, edits)
+                        val actual = DiagramGeometry.path(edited).drop(1).dropLast(1)
+                        assertEquals(absolute.size, actual.size)
+                        absolute.zip(actual).forEach { (before, after) -> point(before, after) }
+                        assertEquals(bends.map { it.weight }, edited.bendpoints.map { it.weight })
+                        assertEquals(original.firstRelativePoint, edited.firstRelativePoint)
+                        assertEquals(original.lastRelativePoint, edited.lastRelativePoint)
+                        for (i in bends.indices) {
+                            point(a.center + bends[i].first, edited.start!!.center + edited.bendpoints[i].first)
+                            point(b.center + bends[i].second, edited.end!!.center + edited.bendpoints[i].second)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fun testEditorResizePersistsRebasedBendsAndUndoRedoRestoresGeometry() = withModelEditor(wireFixture(true)) { canvas, source, document, file ->
+        val original = document.text
+        val originalPath = canvas.wirePath(canvas.diagram.wires[0]).drop(1).dropLast(1)
+        leftDown(canvas, 50, 55)
+        val start = canvas.diagram.nodes.single { it.id == "a" }
+        val edge = (start.location.x + start.width).roundToInt()
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, 1, MouseEvent.BUTTON1_DOWN_MASK,
+            edge, 55, 1, false, MouseEvent.BUTTON1))
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_DRAGGED, 2, MouseEvent.BUTTON1_DOWN_MASK,
+            edge + 40, 55, 0, false, MouseEvent.NOBUTTON))
+        originalPath.zip(canvas.wirePath(canvas.diagram.wires[0]).drop(1).dropLast(1)).forEach { (a, b) -> point(a, b) }
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, 3, 0,
+            edge + 40, 55, 1, false, MouseEvent.BUTTON1))
+        UIUtil.dispatchAllInvocationEvents()
+        val resized = document.text
+        assertTrue(resized.contains("firstDimension=\"80,55\""))
+        assertTrue(resized.contains("secondDimension=\"-100,55\""))
+        assertTrue(resized.contains("weight=\"0.2\" custom=\"point\""))
+        assertEquals(originalPath, canvas.wirePath(canvas.diagram.wires[0]).drop(1).dropLast(1))
+        assertEquals(originalPath, DiagramGeometry.path(parse(resized).wires[0]).drop(1).dropLast(1))
+        val undo = com.intellij.openapi.command.undo.UndoManager.getInstance(project)
+        undo.undo(source)
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(original, document.text)
+        undo.redo(source)
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(resized, document.text)
+        FileDocumentManager.getInstance().saveDocument(document)
+        assertEquals(resized, String(file.contentsToByteArray(), Charsets.UTF_8).replace("\r\n", "\n"))
+    }
+
     fun testActivityVerticalContactsClampXForStatePreviewAndBendsBothDirections() {
         val activity = activity(20.0, 40.0)
         for (x in listOf(20.0, 21.0, 27.9, 28.0, 70.0, 112.0, 112.1, 119.0, 120.0)) {
@@ -128,7 +207,7 @@ class ModelDiagramTest : BasePlatformTestCase() {
             val expected = DiagramPoint(if (x < 20) 20.0 else 120.0, y.coerceIn(48.0, 62.0))
             val path = DiagramGeometry.path(wire(activity, state).copy(firstRelativePoint = null))
             point(expected, path.first())
-            assertEquals(10.0, hypot(path.last().x - state.center.x, path.last().y - state.center.y), 0.000001)
+            assertStateContact(state.center, path[path.lastIndex - 1], path.last())
             assertEquals(path.reversed(), DiagramGeometry.path(wire(state, activity).copy(firstRelativePoint = null)))
             val preview = DiagramGeometry.previewStateEndpoint(wire(activity, state), false, state.center)
             point(expected, preview.first())
@@ -136,32 +215,37 @@ class ModelDiagramTest : BasePlatformTestCase() {
         }
     }
 
-    fun testBothStateKindsProjectDraggedAnchorsOntoTheirCircumference() {
+    fun testBothStateKindsUseRadialPerimeterForStoredContactsBendsAndExplicitPaths() {
         for (kind in listOf(DiagramNodeKind.InitialState, DiagramNodeKind.FinalState)) {
             val node = state(0.0, 0.0).copy(kind = kind)
-            val other = state(200.0, 0.0)
-            val original = wire(node, other).copy(firstRelativePoint = null)
-            point(DiagramPoint(20.0, 10.0), DiagramGeometry.path(original).first())
-            point(DiagramPoint(200.0, 10.0), DiagramGeometry.path(original).last())
-            for ((dx, dy) in listOf(5.0 to 0.0, 0.0 to 5.0, -5.0 to 0.0, 0.0 to -5.0, 3.0 to 4.0)) {
-                val position = node.center + DiagramPoint(dx, dy)
-                val path = DiagramGeometry.path(original.copy(firstRelativePoint = position))
-                val length = hypot(dx, dy)
-                point(node.center + DiagramPoint(dx * 10 / length, dy * 10 / length), path.first())
-                val reverse = wire(other, node).copy(firstRelativePoint = null, lastRelativePoint = position)
-                point(path.first(), DiagramGeometry.path(reverse).last())
+            for (other in listOf(state(200.0, 0.0), activity(200.0, 100.0))) {
+                for (explicit in listOf(false, true)) for (bent in listOf(false, true)) {
+                    val original = wire(node, other).copy(
+                        firstRelativePoint = DiagramPoint(15.0, 10.0),
+                        lastRelativePoint = DiagramPoint(205.0, 105.0),
+                        explicitContacts = explicit,
+                        bendpoints = if (bent) listOf(DiagramBendpoint(
+                            DiagramPoint(100.0, 80.0), DiagramPoint(-100.0, 80.0), 0.3)) else emptyList())
+                    val path = DiagramGeometry.path(original)
+                    assertStateContact(node.center, path[1], path.first())
+                    val changedContact = original.copy(firstRelativePoint = DiagramPoint(5.0, 5.0))
+                    assertEquals(path, DiagramGeometry.path(changedContact))
+                    val reverse = original.copy(start = other, end = node)
+                    val reversed = DiagramGeometry.path(reverse)
+                    assertStateContact(node.center, reversed[reversed.lastIndex - 1], reversed.last())
+                    val moved = node.copy(location = DiagramPoint(40.0, 30.0))
+                    val movedPath = DiagramGeometry.path(original.copy(start = moved))
+                    assertStateContact(moved.center, movedPath[1], movedPath.first())
+                    if (!other.isActivity) assertStateContact(other.center, path[path.lastIndex - 1], path.last())
+                }
             }
-            val centered = DiagramGeometry.path(original.copy(firstRelativePoint = node.center))
-            assertEquals(10.0, hypot(centered.first().x - node.center.x, centered.first().y - node.center.y), 0.000001)
-            val bent = original.copy(firstRelativePoint = DiagramPoint(10.0, 15.0), bendpoints = listOf(
-                DiagramBendpoint(DiagramPoint(100.0, 80.0), DiagramPoint(-100.0, 80.0), 0.3)))
-            point(DiagramPoint(10.0, 20.0), DiagramGeometry.path(bent).first())
         }
-        val original = wire(state(0.0, 0.0), state(200.0, 0.0)).copy(firstRelativePoint = DiagramPoint(15.0, 10.0))
-        point(DiagramPoint(30.0, 10.0), DiagramGeometry.previewStateEndpoint(original, true, DiagramPoint(20.0, 10.0)).first())
+        val original = wire(state(0.0, 0.0), state(200.0, 0.0))
+        point(DiagramPoint(30.0, 10.0),
+            DiagramGeometry.previewStateEndpoint(original, true, DiagramPoint(20.0, 10.0)).first())
     }
 
-    fun testStateEndpointCircumferencePersistsThroughMoveSaveAndUndo() {
+    fun testStateEndpointRadialPerimeterPersistsThroughMoveSaveAndUndo() {
         val text = wireFixture().replace("xsi:type=\"Activity\" id=\"b\" name=\"B\" location=\"220,40\"",
             "xsi:type=\"InitialState\" id=\"b\" name=\"B\" location=\"220,45\"")
         withModelEditor(text) { canvas, source, document, file ->
@@ -170,7 +254,7 @@ class ModelDiagramTest : BasePlatformTestCase() {
             UIUtil.dispatchAllInvocationEvents()
             val state = canvas.diagram.nodes.single { it.id == "b" }
             val endpoint = canvas.wirePath(canvas.selectedWire!!).last()
-            point(DiagramPoint(230 + 10 / kotlin.math.sqrt(2.0), 55 - 10 / kotlin.math.sqrt(2.0)), endpoint)
+            point(DiagramPoint(220.0, 55.0), endpoint)
             assertEquals(DiagramPoint(235.0, 50.0), canvas.selectedWire!!.lastRelativePoint)
             val anchored = document.text
             val undo = com.intellij.openapi.command.undo.UndoManager.getInstance(project)
@@ -185,7 +269,7 @@ class ModelDiagramTest : BasePlatformTestCase() {
                 230 - endpoint.x.roundToInt(), 65 - endpoint.y.roundToInt(), MouseEvent.BUTTON1)
             UIUtil.dispatchAllInvocationEvents()
             assertEquals(DiagramPoint(230.0, 65.0), canvas.selectedWire!!.lastRelativePoint)
-            point(DiagramPoint(230.0, 65.0), canvas.wirePath(canvas.selectedWire!!).last())
+            point(DiagramPoint(220.0, 55.0), canvas.wirePath(canvas.selectedWire!!).last())
             undo.undo(source)
             UIUtil.dispatchAllInvocationEvents()
             assertEquals(anchored, document.text)
@@ -193,7 +277,8 @@ class ModelDiagramTest : BasePlatformTestCase() {
             UIUtil.dispatchAllInvocationEvents()
             val moved = canvas.diagram.wires[0]
             assertEquals(DiagramPoint(275.0, 80.0), moved.lastRelativePoint)
-            point(endpoint + DiagramPoint(40.0, 30.0), canvas.wirePath(moved).last())
+            val movedPath = canvas.wirePath(moved)
+            assertStateContact(moved.end!!.center, movedPath[movedPath.lastIndex - 1], movedPath.last())
             FileDocumentManager.getInstance().saveDocument(document)
             assertEquals(document.text, String(file.contentsToByteArray(), Charsets.UTF_8).replace("\r\n", "\n"))
             undo.undo(source)
@@ -381,6 +466,15 @@ class ModelDiagramTest : BasePlatformTestCase() {
     }
     private fun activity(x: Double, y: Double, width: Double = 100.0) =
         DiagramNode(DiagramNodeKind.Activity, "a", "Activity", DiagramPoint(x, y), width, 30.0)
+    private fun assertStateContact(center: DiagramPoint, neighbor: DiagramPoint, contact: DiagramPoint) {
+        val dx = neighbor.x - center.x
+        val dy = neighbor.y - center.y
+        val length = hypot(dx, dy)
+        val expected = if (length == 0.0) center else
+            center + DiagramPoint(dx * 10.0 / length, dy * 10.0 / length)
+        point(expected, contact)
+    }
+
     private fun state(x: Double, y: Double) =
         DiagramNode(DiagramNodeKind.InitialState, "s", "", DiagramPoint(x, y), 20.0, 20.0)
     private fun wire(a: DiagramNode?, b: DiagramNode?, bends: List<DiagramBendpoint> = emptyList()) =
@@ -422,12 +516,12 @@ class ModelDiagramTest : BasePlatformTestCase() {
         assertNotNull(parse("").message)
     }
 
-    fun testStateCircumferenceAndVerticalStateActivityConnectionsAreSymmetric() {
+    fun testStateRadialPerimetersAndVerticalStateActivityConnectionsAreSymmetric() {
         val a = state(10.0, 10.0)
         val b = state(100.0, 100.0)
         val diagonal = DiagramGeometry.path(wire(a, b))
-        point(a.center + DiagramPoint(10 / kotlin.math.sqrt(2.0), 10 / kotlin.math.sqrt(2.0)), diagonal.first())
-        point(b.center + DiagramPoint(-10 / kotlin.math.sqrt(2.0), -10 / kotlin.math.sqrt(2.0)), diagonal.last())
+        assertStateContact(a.center, diagonal[1], diagonal.first())
+        assertStateContact(b.center, diagonal[0], diagonal.last())
         val activity = activity(0.0, 100.0)
         val points = DiagramGeometry.path(wire(a, activity))
         point(DiagramPoint(20.0, 30.0), points[0])
@@ -831,8 +925,9 @@ class ModelDiagramTest : BasePlatformTestCase() {
             leftDown(canvas, 45, 75)
             drag(canvas, 541, 75, 40, 0, MouseEvent.BUTTON1)
             UIUtil.dispatchAllInvocationEvents()
-            val wider = original.replace("size=\"505,-1\"", "size=\"545,-1\"")
-            assertEquals(wider, document.text)
+            val wider = document.text
+            assertTrue(wider.contains("size=\"545,-1\""))
+            assertTrue(wider.contains("firstDimension=\"72,172\""))
             val undo = com.intellij.openapi.command.undo.UndoManager.getInstance(project)
             undo.undo(source)
             UIUtil.dispatchAllInvocationEvents()
@@ -842,8 +937,10 @@ class ModelDiagramTest : BasePlatformTestCase() {
             assertEquals(wider, document.text)
             drag(canvas, 36, 75, 20, 0, MouseEvent.BUTTON1)
             UIUtil.dispatchAllInvocationEvents()
-            val leftResized = wider.replace("location=\"36,60\"", "location=\"56,60\"").replace("size=\"545,-1\"", "size=\"525,-1\"")
-            assertEquals(leftResized, document.text)
+            val leftResized = document.text
+            assertTrue(leftResized.contains("location=\"56,60\""))
+            assertTrue(leftResized.contains("size=\"525,-1\""))
+            assertTrue(leftResized.contains("firstDimension=\"62,172\""))
             undo.undo(source)
             UIUtil.dispatchAllInvocationEvents()
             assertEquals(wider, document.text)
@@ -1259,7 +1356,7 @@ class ModelDiagramTest : BasePlatformTestCase() {
         }
     }
 
-    fun testVirtualStateEndpointUsesStateCircumferenceInEitherDirection() {
+    fun testVirtualStateEndpointUsesRadialPerimeterInEitherDirection() {
         val a = state(20.0, 20.0)
         val b = state(100.0, 100.0)
         val source = wire(a, b)
@@ -1268,16 +1365,12 @@ class ModelDiagramTest : BasePlatformTestCase() {
             val path = DiagramGeometry.previewStateEndpoint(source, start, mouse)
             val centers = if (start) listOf(mouse, b.center) else listOf(a.center, mouse)
             path.zip(centers).forEachIndexed { index, (contact, center) ->
-                val opposite = centers[1 - index]
-                assertEquals(10.0, hypot(contact.x - center.x, contact.y - center.y), 0.000001)
-                assertEquals(0.0, (contact.x - center.x) * (opposite.y - center.y) -
-                    (contact.y - center.y) * (opposite.x - center.x), 0.000001)
-                assertTrue((contact.x - center.x) * (opposite.x - center.x) + (contact.y - center.y) * (opposite.y - center.y) > 0)
+                assertStateContact(center, centers[1 - index], contact)
             }
         }
     }
 
-    fun testVirtualStateEndpointCorrectsActivityEdgesAndStateCircleSymmetrically() {
+    fun testVirtualStateEndpointCorrectsActivityEdgesAndStatePerimeterSymmetrically() {
         val activity = activity(0.0, 100.0)
         val state = state(300.0, 300.0)
         val mouse = DiagramPoint(50.0, 20.0)
@@ -1395,7 +1488,7 @@ class ModelDiagramTest : BasePlatformTestCase() {
                 DiagramPoint(25.0 - 4.8 * sign, 30.0 + 3.6 * sign)).bendpoints.size)
         }
         val zero = wire(state(10.0, 10.0), state(10.0, 10.0))
-        assertSame(zero, DiagramEdits.dragMidpoint(zero, 0, DiagramPoint(35.0, 20.0)))
+        assertEquals(listOf(zero.start!!.center, zero.end!!.center), DiagramGeometry.path(zero))
         assertEquals(1, DiagramEdits.dragMidpoint(zero, 0, DiagramPoint(36.0, 20.0)).bendpoints.size)
     }
 

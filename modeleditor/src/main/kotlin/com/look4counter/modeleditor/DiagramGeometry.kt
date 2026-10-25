@@ -38,25 +38,28 @@ object DiagramGeometry {
             val b = end.center + bend.second
             DiagramPoint(a.x + (b.x - a.x) * ratio, a.y + (b.y - a.y) * ratio)
         }
-        if (explicit) return listOf(wire.firstRelativePoint!!) + bends + wire.lastRelativePoint!!
-        val first = if (start.isActivity) toward(start, bends.first()) else stateContact(start, bends.first(), wire.firstRelativePoint)
-        val last = if (end.isActivity) toward(end, bends.last()) else stateContact(end, bends.last(), wire.lastRelativePoint)
+        val source = if (explicit && start.isActivity) wire.firstRelativePoint!! else start.center
+        val target = if (explicit && end.isActivity) wire.lastRelativePoint!! else end.center
+        val firstNeighbor = bends.firstOrNull() ?: target
+        val lastNeighbor = bends.lastOrNull() ?: source
+        val first = if (!start.isActivity) circle(start.center, firstNeighbor, 10.0)
+            else if (explicit) source else toward(start, firstNeighbor)
+        val last = if (!end.isActivity) circle(end.center, lastNeighbor, 10.0)
+            else if (explicit) target else toward(end, lastNeighbor)
         return listOf(first) + bends + last
     }
 
     fun endpoints(start: DiagramNode, end: DiagramNode, preferred: DiagramPoint,
                   lastPreferred: DiagramPoint? = null): Pair<DiagramPoint, DiagramPoint> {
         if (!start.isActivity && !end.isActivity)
-            return stateContact(start, end.center, preferred) to stateContact(end, start.center, lastPreferred)
+            return circle(start.center, end.center, 10.0) to circle(end.center, start.center, 10.0)
         if (!start.isActivity) {
-            val toward = if (validStatePreference(start, preferred)) stateContact(start, end.center, preferred) else start.center
-            val b = toward(end, toward)
-            return stateContact(start, b, preferred) to b
+            val contact = toward(end, start.center)
+            return circle(start.center, contact, 10.0) to contact
         }
         if (!end.isActivity) {
-            val toward = if (validStatePreference(end, lastPreferred)) stateContact(end, start.center, lastPreferred) else end.center
-            val a = toward(start, toward)
-            return a to stateContact(end, a, lastPreferred)
+            val contact = toward(start, end.center)
+            return contact to circle(end.center, contact, 10.0)
         }
         val left = max(start.location.x + 8, end.location.x + 8)
         val right = min(start.location.x + start.width - 8, end.location.x + end.width - 8)
@@ -97,19 +100,6 @@ object DiagramGeometry {
                 point.y.coerceIn(node.location.y + 8, node.location.y + node.height - 8))
         }
         return circle(corner(node, point), point)
-    }
-
-    private fun validStatePreference(node: DiagramNode, point: DiagramPoint?): Boolean {
-        if (point == null) return false
-        val distance = hypot(point.x - node.center.x, point.y - node.center.y)
-        return distance > 1e-9 && distance <= 10.0 + 1e-9
-    }
-
-    private fun stateContact(node: DiagramNode, toward: DiagramPoint, preferred: DiagramPoint?): DiagramPoint {
-        val direction = if (validStatePreference(node, preferred)) preferred!! else toward
-        val target = if (hypot(direction.x - node.center.x, direction.y - node.center.y) <= 1e-9)
-            node.center + DiagramPoint(1.0, 0.0) else direction
-        return circle(node.center, target, 10.0)
     }
 
     private fun corner(node: DiagramNode, other: DiagramPoint) = DiagramPoint(

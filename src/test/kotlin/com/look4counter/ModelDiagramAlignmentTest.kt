@@ -8,10 +8,40 @@ class ModelDiagramAlignmentTest : BasePlatformTestCase() {
     private fun send(canvas: ModelDiagramCanvas, type: Int, x: Int, y: Int, modifiers: Int = 0) = canvas.dispatchEvent(
         MouseEvent(canvas, type, 0, modifiers, x, y, 1, false, MouseEvent.BUTTON1))
 
+    fun testSnapToggleControlsChildMoveAndResizeGuides() {
+        val a = node("1", 20.0, 40.0)
+        val b = node("2", 220.0, 140.0)
+        for (snap in listOf(false, true)) {
+            val canvas = ModelDiagramCanvas().apply { display(ModelDiagram(listOf(a, b), emptyList())); snapEnabled = snap }
+            send(canvas, MouseEvent.MOUSE_PRESSED, 70, 55)
+            send(canvas, MouseEvent.MOUSE_DRAGGED, 167, 153)
+            assertEquals(if (snap) DiagramPoint(120.0, 140.0) else DiagramPoint(117.0, 138.0), canvas.diagram.nodes[0].location)
+            assertEquals(snap, canvas.alignmentGuides.isNotEmpty())
+            if (snap) {
+                canvas.snapEnabled = false
+                assertTrue(canvas.alignmentGuides.isEmpty())
+                assertEquals(DiagramPoint(117.0, 138.0), canvas.diagram.nodes[0].location)
+            }
+            canvas.cancelDrag()
+            canvas.snapEnabled = snap
+            canvas.selectNodesByIds(setOf("1"))
+            send(canvas, MouseEvent.MOUSE_PRESSED, 120, 55)
+            send(canvas, MouseEvent.MOUSE_DRAGGED, 217, 55)
+            assertEquals(if (snap) 200.0 else 197.0, canvas.diagram.nodes[0].width)
+            assertEquals(snap, canvas.alignmentGuides.isNotEmpty())
+            canvas.cancelDrag()
+            canvas.selectNodesByIds(setOf("1"))
+            send(canvas, MouseEvent.MOUSE_PRESSED, 120, 55)
+            send(canvas, MouseEvent.MOUSE_DRAGGED, -300, 55)
+            assertEquals(16.0, canvas.diagram.nodes[0].width)
+            canvas.cancelDrag()
+        }
+    }
+
     fun testClickReadOnlyAndSourceReplacementClearPreview() {
         val a = node("1", 20.0, 40.0); val b = node("2", 123.0, 40.0)
         val model = ModelDiagram(listOf(a, b), emptyList())
-        val canvas = ModelDiagramCanvas().apply { display(model) }
+        val canvas = ModelDiagramCanvas().apply { snapEnabled = true; display(model) }
         var commits = 0
         canvas.onNodesMoved = { commits++ }
         send(canvas, MouseEvent.MOUSE_PRESSED, 70, 55)
@@ -39,7 +69,7 @@ class ModelDiagramAlignmentTest : BasePlatformTestCase() {
     fun testResizeCommonDeltaFixedOppositeEdgeAndMinimum() {
         val a = node("1", 20.0, 40.0, 60.0); val b = node("2", 20.0, 100.0, 80.0)
         val target = node("3", 400.0, 200.0)
-        val canvas = ModelDiagramCanvas().apply { display(ModelDiagram(listOf(a, b, target), emptyList())) }
+        val canvas = ModelDiagramCanvas().apply { snapEnabled = true; display(ModelDiagram(listOf(a, b, target), emptyList())) }
         canvas.selectNodesByIds(setOf("1", "2"))
         send(canvas, MouseEvent.MOUSE_PRESSED, 20, 115)
         send(canvas, MouseEvent.MOUSE_DRAGGED, 3, 115)
@@ -69,7 +99,7 @@ class ModelDiagramAlignmentTest : BasePlatformTestCase() {
             else (component as? java.awt.Container)?.components?.firstNotNullOfOrNull(::find)
         try {
             com.intellij.testFramework.EditorTestUtil.waitForLoading(source.editor)
-            val canvas = find(design.component)!!
+            val canvas = find(design.component)!!.apply { snapEnabled = true }
             val original = source.editor.document.text
             send(canvas, MouseEvent.MOUSE_PRESSED, 70, 55)
             send(canvas, MouseEvent.MOUSE_DRAGGED, 267, 153)
@@ -99,7 +129,7 @@ class ModelDiagramAlignmentTest : BasePlatformTestCase() {
     fun testSpacingMultiSelectionAltNavigationFinalReleaseAndImage() {
         val nodes = listOf(node("s1", 20.0, 40.0, 40.0), node("s2", 80.0, 40.0, 40.0),
             node("a", 20.0, 140.0), node("b", 420.0, 140.0))
-        val canvas = ModelDiagramCanvas().apply { display(ModelDiagram(nodes, emptyList())); setSize(720, 400) }
+        val canvas = ModelDiagramCanvas().apply { snapEnabled = true; display(ModelDiagram(nodes, emptyList())); setSize(720, 400) }
         canvas.selectNodesByIds(setOf("s1", "s2"))
         canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, 0, 0, 100, 300, 1, false, MouseEvent.BUTTON3))
         canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_DRAGGED, 0, MouseEvent.BUTTON3_DOWN_MASK, 130, 320, 1, false, MouseEvent.NOBUTTON))
@@ -126,7 +156,7 @@ class ModelDiagramAlignmentTest : BasePlatformTestCase() {
     fun testSpacingPreviewClearsOnEscapeSourceAndReadOnly() {
         val nodes = listOf(node("s", 20.0, 40.0), node("a", 20.0, 140.0), node("b", 420.0, 140.0))
         for (action in listOf("escape", "source", "readOnly")) {
-            val canvas = ModelDiagramCanvas().apply { display(ModelDiagram(nodes, emptyList())) }
+            val canvas = ModelDiagramCanvas().apply { snapEnabled = true; display(ModelDiagram(nodes, emptyList())) }
             var commits = 0
             canvas.onNodesMoved = { commits++ }
             send(canvas, MouseEvent.MOUSE_PRESSED, 70, 55)
@@ -247,7 +277,7 @@ class ModelDiagramAlignmentTest : BasePlatformTestCase() {
     }
 
     fun testCanvasLiveSnapAltReleaseAndCancel() {
-        val canvas = ModelDiagramCanvas()
+        val canvas = ModelDiagramCanvas().apply { snapEnabled = true }
         val a = node("1", 20.0, 40.0); val b = node("2", 220.0, 140.0)
         canvas.display(ModelDiagram(listOf(a, b), emptyList()))
         fun send(type: Int, x: Int, y: Int, modifiers: Int = 0) = canvas.dispatchEvent(

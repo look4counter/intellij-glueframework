@@ -11,6 +11,7 @@ import com.intellij.openapi.fileTypes.PlainTextFileType
 import com.intellij.openapi.project.Project
 import com.intellij.ui.EditorTextField
 import com.look4counter.queryeditor.sql.SqlSyntaxHighlighter
+import com.look4counter.queryeditor.sql.SqlParameterHints
 
 internal class QuerySqlEditor(project: Project, document: Document) :
     EditorTextField(document, project, PlainTextFileType.INSTANCE, false, false) {
@@ -36,5 +37,6 @@ internal class QuerySqlEditor(project: Project, document: Document) :
         EditorUtil.disposeWithEditor(this, gutterSpace)
         gutterComponentEx.setRightFreePaintersAreaState(EditorGutterFreePainterAreaState.SHOW)
         gutterComponentEx.reserveRightFreePaintersAreaWidth(gutterSpace, JBUI.scale(18))
+        SqlParameterHints.install(this)
     }
 }

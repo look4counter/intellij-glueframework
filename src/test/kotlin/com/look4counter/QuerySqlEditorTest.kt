@@ -1,5 +1,6 @@
 package com.look4counter
 
+import com.intellij.codeInsight.daemon.impl.ParameterHintsPresentationManager
 import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.command.undo.UndoManager
 import com.intellij.openapi.editor.colors.EditorColorsManager
@@ -62,6 +63,55 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
                 iterator.advance()
             }
         }
+    }
+
+    private fun parameterHints(field: EditorTextField): List<Pair<Int, String>> {
+        val presentation = ParameterHintsPresentationManager.getInstance()
+        return presentation.getParameterHintsInRange(field.editor!!, 0, field.document.textLength)
+            .map { it.offset to presentation.getHintText(it) }
+    }
+
+    fun testPositionalParametersShareCyanAndHaveOrderedInlineHints() {
+        val sql = "select ?, :name, '?', \"?\", ? -- ?\n /* outer ? /* nested ? */ ? */ ?; ?"
+        val field = openSql(sql)
+        val expected = listOf(sql.indexOf('?'), sql.indexOf("? --"), sql.indexOf("?;"), sql.lastIndexOf('?'))
+        assertEquals(expected.zip(listOf("0:", "1:", "2:", "3:")), parameterHints(field))
+        val parameters = tokens(field).filter { it.type == "GLUE_SQL_PARAMETER" }
+        assertEquals(listOf("?", ":name", "?", "?", "?"), parameters.map { it.text })
+        assertTrue(parameters.all { it.color!!.rgb == Color(0x008B9A).rgb })
+        assertEquals(sql, field.document.text)
+    }
+
+    fun testParameterHintRenumberingQuerySwitchUndoAndStorage() {
+        val field = openSql("select ?, ?", secondQuery = true)
+        val original = field.text
+        val source = FileEditorProviderManager.getInstance().getProviderList(project, design!!.file!!)
+            .single { it.editorTypeId == "glue-query-source" }.createEditor(project, design!!.file!!) as TextEditor
+        try {
+            WriteCommandAction.runWriteCommandAction(project) { field.document.insertString(7, "?, ") }
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(listOf("0:", "1:", "2:"), parameterHints(field).map { it.second })
+            UndoManager.getInstance(project).undo(source)
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(original, field.text)
+            assertEquals(listOf("0:", "1:"), parameterHints(field).map { it.second })
+            UndoManager.getInstance(project).redo(source)
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(listOf("0:", "1:", "2:"), parameterHints(field).map { it.second })
+            val list = descendants(design!!.component).filterIsInstance<JList<*>>().single()
+            list.selectedIndex = 0
+            assertTrue(parameterHints(field).isEmpty())
+            list.selectedIndex = 1
+            assertEquals(listOf("0:", "1:", "2:"), parameterHints(field).map { it.second })
+            WriteCommandAction.runWriteCommandAction(project) { field.document.setText("select '?', :name -- ?") }
+            UIUtil.dispatchAllInvocationEvents()
+            assertTrue(parameterHints(field).isEmpty())
+            val rootDocument = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
+            FileDocumentManager.getInstance().saveDocument(rootDocument)
+            assertTrue(rootDocument.text.contains("select '?', :name -- ?"))
+            assertFalse(rootDocument.text.contains("0:"))
+            assertEquals(rootDocument.text, String(design!!.file!!.contentsToByteArray(), Charsets.UTF_8).replace("\r\n", "\n"))
+        } finally { Disposer.dispose(source) }
     }
 
     fun testSqlTokenBoundariesAndRequestedColors() {
@@ -215,7 +265,7 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
                 JBColor.setDark(true)
                 colors.setGlobalScheme(colors.getScheme("Darcula")!!)
             }
-            val sample = "select empno, 123, 3.14, 'hello SQL', \"EMP_NAME\"\nfrom emp\nwhere empno = :empno and ename = :name;\n-- SELECT 99 ':comment'\n/* UPDATE 5 */"
+            val sample = "select empno, 123, 3.14, 'hello SQL', \"EMP_NAME\"\nfrom emp\nwhere empno = :empno and ename = :name and salary > ? and deptno = ?;\n-- SELECT 99 ':comment'\n/* UPDATE 5 */"
             val field = openSql(sample)
             field.setSize(720, 220)
             repeat(3) { descendants(field).filterIsInstance<Container>().forEach { it.doLayout() } }
@@ -226,6 +276,8 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
             Files.createDirectories(output.parent)
             javax.imageio.ImageIO.write(image, "png", output.toFile())
             val values = tokens(field)
+            assertEquals(listOf("0:", "1:"), parameterHints(field).map { it.second })
+            assertTrue(values.filter { it.text == "?" }.all { it.color!!.rgb == Color(if (dark) 0x56D4DD else 0x008B9A).rgb })
             assertEquals(Color(if (dark) 0xFFA657 else 0xC46600).rgb, values.first().color!!.rgb)
             assertEquals(Color(if (dark) 0x6CA8F5 else 0x175BC1).rgb, values.first { it.type == "GLUE_SQL_NUMBER" }.color!!.rgb)
             assertEquals(Color(if (dark) 0x78C78B else 0x26823B).rgb, values.first { it.type == "GLUE_SQL_QUOTED" }.color!!.rgb)

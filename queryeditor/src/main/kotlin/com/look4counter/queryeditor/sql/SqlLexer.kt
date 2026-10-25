@@ -93,6 +93,7 @@ internal class SqlLexer : LexerBase() {
                 while (end < limit && isWord(buffer[end])) end++
                 SqlTokens.PARAMETER
             }
+            char == '?' -> SqlTokens.PARAMETER
             isWord(char) -> {
                 while (end < limit && isWord(buffer[end])) end++
                 val compound = SqlKeywords.hyphenated.firstOrNull {

@@ -47,7 +47,8 @@ class ModelDesignEditorProvider : FileEditorProvider, DumbAware {
 
 private class ModelDesignEditor(private val project: Project, private val file: VirtualFile) : UserDataHolderBase(), FileEditor {
     private val changes = PropertyChangeSupport(this)
-    private val canvas = ModelDiagramCanvas()
+    private val snapSettings = ModelSnapSettings.getInstance()
+    private val canvas = ModelDiagramCanvas().apply { snapEnabled = snapSettings.enabled }
     private val document = FileDocumentManager.getInstance().getDocument(file)
     private val serviceAdapter = if (ServiceDiagramAdapter.accepts(project, file)) ServiceDiagramAdapter(project, file) else null
     private var disposed = false
@@ -69,7 +70,7 @@ private class ModelDesignEditor(private val project: Project, private val file: 
         }, { kind ->
             PropertiesComponent.getInstance(project).setValue(kindSetting, kind.name)
             if (canvas.creationKind != null) canvas.setCreationKind(kind)
-        }, { canvas.wireMagnetEnabled }, { canvas.wireMagnetEnabled = it }, ::editDiagram,
+        }, { snapSettings.enabled }, { snapSettings.enabled = it }, ::editDiagram,
         { canEditDocument() && !scheduled && !canvas.isDragging && canvas.creationKind == null && !canvas.wireCreationMode },
         presets = { ModelEditorSettings.getInstance(project).state.presets },
         onPresetChanged = { preset -> if (canvas.creationKind == DiagramNodeKind.Activity) canvas.setCreationKind(DiagramNodeKind.Activity, preset) },
@@ -88,6 +89,18 @@ private class ModelDesignEditor(private val project: Project, private val file: 
             javax.swing.ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER).apply { isWheelScrollingEnabled = false }, BorderLayout.CENTER)
     }
     init {
+        val application = ApplicationManager.getApplication()
+        application.messageBus.connect(this).subscribe(ModelSnapSettingsListener.TOPIC, object : ModelSnapSettingsListener {
+            override fun snapChanged(enabled: Boolean) {
+                val update = Runnable {
+                    if (!disposed && !project.isDisposed) {
+                        canvas.snapEnabled = snapSettings.enabled
+                        creationToolbar.refresh()
+                    }
+                }
+                if (application.isDispatchThread) update.run() else application.invokeLater(update)
+            }
+        })
         canvas.onCreationTrace = creationTrace::line
         creationToolbar.onCreationTrace = creationTrace::line
         creationTrace.install(canvas, this)
@@ -662,6 +675,13 @@ private class ModelDesignEditor(private val project: Project, private val file: 
                 }
                 if (moved.lastRelativePoint != wire.lastRelativePoint) moved.lastRelativePoint?.let {
                     wireTags[wire.index].setAttribute("lastRelativePoint", "${number(it.x)},${number(it.y)}")
+                }
+                if (moved.bendpoints != wire.bendpoints) {
+                    wireTags[wire.index].subTags.filter { it.localName == "bendpoint" }
+                        .zip(moved.bendpoints).forEach { (tag, bend) ->
+                            tag.setAttribute("firstDimension", "${number(bend.first.x)},${number(bend.first.y)}")
+                            tag.setAttribute("secondDimension", "${number(bend.second.x)},${number(bend.second.y)}")
+                        }
                 }
                 if (wire.start in editsByNode || wire.end in editsByNode)
                     DiagramXmlText.normalizeCoordinates(wireTags[wire.index])

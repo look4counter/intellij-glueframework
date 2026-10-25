@@ -44,7 +44,16 @@ import java.util.Locale
 
 class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable {
     var navigationOnly = false
-    var wireMagnetEnabled = false
+    var snapEnabled = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (!value) {
+                alignmentGuides = emptyList()
+                lastChildDrag?.let { previewChildDrag(it, true) }
+            }
+            repaint()
+        }
     override fun getPreferredScrollableViewportSize(): Dimension = preferredSize
     override fun getScrollableUnitIncrement(visible: java.awt.Rectangle, orientation: Int, direction: Int) = 30
     override fun getScrollableBlockIncrement(visible: java.awt.Rectangle, orientation: Int, direction: Int) =
@@ -128,7 +137,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         if (target != null && target.id == start.id && target.kind == start.kind) return null
         val end = target ?: DiagramNode(DiagramNodeKind.InitialState, "wire-preview", "",
             point + DiagramPoint(-10.0, -10.0), 20.0, 20.0)
-        return draftWire(start, end, wireCreationStartPoint ?: start.center, point, attachMagnet = target != null)
+        return draftWire(start, end, wireCreationStartPoint ?: start.center, point, attachSnap = target != null)
     }
     private var resizeLeft: Boolean? = null
     private var dragBase: ModelDiagram? = null
@@ -612,10 +621,10 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         val raw = DiagramPoint((point.x - anchor.x) / zoom, (point.y - anchor.y) / zoom)
         val left = resizeLeft
         val result = if (left == null) {
-            if (bypass) AlignmentResult(raw, emptyList()) else DiagramAlignment.move(draggedNodes, alignmentTargets, raw)
+            if (bypass || !snapEnabled) AlignmentResult(raw, emptyList()) else DiagramAlignment.move(draggedNodes, alignmentTargets, raw)
         } else {
             val widthDelta = maxOf(if (left) -raw.x else raw.x, 16.0 - draggedNodes.minOf { it.width })
-            if (bypass) AlignmentResult(DiagramPoint(widthDelta, 0.0), emptyList())
+            if (bypass || !snapEnabled) AlignmentResult(DiagramPoint(widthDelta, 0.0), emptyList())
             else DiagramAlignment.resize(draggedNodes, alignmentTargets, widthDelta, left)
         }
         alignmentGuides = result.guides
@@ -731,14 +740,14 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     }
 
     private fun draftWire(start: DiagramNode, end: DiagramNode, from: DiagramPoint, to: DiagramPoint,
-                          attachMagnet: Boolean = true): DiagramWire {
-        val first = if (wireMagnetEnabled) WireMagnet.position(start, from, end) else from
-        val last = if (wireMagnetEnabled) WireMagnet.position(end, to, start) else to
+                          attachSnap: Boolean = true): DiagramWire {
+        val first = if (snapEnabled) WireSnap.position(start, from, end) else from
+        val last = if (snapEnabled) WireSnap.position(end, to, start) else to
         var wire = DiagramWire(-1, "", "", start, end,
             if (start.isActivity && end.isActivity) last else first, last, emptyList())
-        if (wireMagnetEnabled && attachMagnet) {
-            wire = WireMagnet.attach(wire, true, first)
-            wire = WireMagnet.attach(wire, false, last)
+        if (snapEnabled && attachSnap) {
+            wire = WireSnap.attach(wire, true, first)
+            wire = WireSnap.attach(wire, false, last)
         }
         return wire
     }
@@ -841,7 +850,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         val target = validEndpointTarget(point)
         val rawPosition = modelPoint(point)
         val opposite = if (key.second) original.end else original.start
-        val position = if (wireMagnetEnabled && target != null) WireMagnet.position(target, rawPosition,
+        val position = if (snapEnabled && target != null) WireSnap.position(target, rawPosition,
             opposite.takeIf { original.bendpoints.isEmpty() }) else rawPosition
         val wire = if (target == null) {
             endpointPreview[key] = position
@@ -853,7 +862,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             val adjusted = if (connected.bendpoints.isEmpty() && connected.start?.isActivity == true && connected.end?.isActivity == true)
                 connected.copy(firstRelativePoint = position)
             else connected
-            if (wireMagnetEnabled) WireMagnet.attach(adjusted, key.second, position) else adjusted
+            if (snapEnabled) WireSnap.attach(adjusted, key.second, position) else adjusted
         }
         replaceWire(wire)
     }
@@ -863,7 +872,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         val handle = bendDrag ?: return
         val index = handle.pointIndex?.minus(1) ?: handle.segmentIndex!!
         val rawPosition = modelPoint(point)
-        val position = if (wireMagnetEnabled) WireMagnet.dragPosition(original, rawPosition) else rawPosition
+        val position = if (snapEnabled) WireSnap.dragPosition(original, rawPosition) else rawPosition
         replaceWire(if (handle.pointIndex == null) DiagramEdits.dragMidpoint(original, index, position)
             else DiagramEdits.dragBendpoint(original, index, position))
     }

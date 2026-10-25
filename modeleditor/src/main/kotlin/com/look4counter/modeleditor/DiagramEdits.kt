@@ -81,9 +81,24 @@ object DiagramEdits {
             if (old == null || moved == null || old.isActivity || point == null) return point
             return point + DiagramPoint(moved.center.x - old.center.x, moved.center.y - old.center.y)
         }
+        fun resizeDelta(old: DiagramNode?, resized: DiagramNode?): DiagramPoint {
+            if (old == null || resized == null || old.width == resized.width && old.height == resized.height)
+                return DiagramPoint(0.0, 0.0)
+            return DiagramPoint(resized.center.x - old.center.x, resized.center.y - old.center.y)
+        }
+        val startResize = resizeDelta(wire.start, start)
+        val endResize = resizeDelta(wire.end, end)
+        val resized = startResize != DiagramPoint(0.0, 0.0) || endResize != DiagramPoint(0.0, 0.0)
+        val directContact = if (resized && wire.bendpoints.isEmpty() &&
+            wire.start?.isActivity == true && wire.end?.isActivity == true && wire.firstRelativePoint == null)
+            DiagramGeometry.path(wire).firstOrNull() else null
+        val bends = if (!resized) wire.bendpoints
+            else wire.bendpoints.map { bend -> bend.copy(
+                first = DiagramPoint(bend.first.x - startResize.x, bend.first.y - startResize.y),
+                second = DiagramPoint(bend.second.x - endResize.x, bend.second.y - endResize.y)) }
         return wire.copy(start = start, end = end, explicitContacts = wire.explicitContacts && groupDelta != null,
-            firstRelativePoint = translated(wire.start, start, wire.firstRelativePoint),
-            lastRelativePoint = translated(wire.end, end, wire.lastRelativePoint))
+            firstRelativePoint = translated(wire.start, start, wire.firstRelativePoint) ?: directContact,
+            lastRelativePoint = translated(wire.end, end, wire.lastRelativePoint), bendpoints = bends)
     }
 
     private fun crossesInterior(a: DiagramPoint, b: DiagramPoint, node: DiagramNode): Boolean {

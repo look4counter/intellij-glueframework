@@ -21,8 +21,8 @@ class ChildCreationToolbar(
     private val isActive: () -> Boolean,
     private val onToggle: (Boolean, DiagramNodeKind) -> Unit,
     private val onKindChanged: (DiagramNodeKind) -> Unit,
-    private val magnetState: () -> Boolean = { false },
-    private val onMagnetChanged: (Boolean) -> Unit = {},
+    private val snapState: () -> Boolean = { false },
+    private val onSnapChanged: (Boolean) -> Unit = {},
     private val onDiagramProperties: () -> Unit = {},
     private val canEditProperties: () -> Boolean = canEdit,
     private val presets: () -> List<ActivityPreset> = { emptyList() },
@@ -156,13 +156,13 @@ class ChildCreationToolbar(
         }
     }
 
-    val magnetAction: ToggleAction = object : ToggleAction("Magnetic", "Activity 중심과 30px 간격에 Wire 접점 맞추기", null), DumbAware {
+    val snapAction: ToggleAction = object : ToggleAction("Snap", "Wire 접점과 Child 이동·크기 조절의 보조선 및 정렬 붙이기", null), DumbAware {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
-        override fun isSelected(event: AnActionEvent) = magnetState()
-        override fun setSelected(event: AnActionEvent, selected: Boolean) { onMagnetChanged(selected); refresh() }
+        override fun isSelected(event: AnActionEvent) = snapState()
+        override fun setSelected(event: AnActionEvent, selected: Boolean) { onSnapChanged(selected); refresh() }
         override fun update(event: AnActionEvent) {
             super.update(event)
-            event.presentation.text = "Magnetic"
+            event.presentation.text = "Snap"
             event.presentation.putClientProperty(com.intellij.openapi.actionSystem.ex.ActionUtil.SHOW_TEXT_IN_TOOLBAR, true)
         }
     }
@@ -207,7 +207,7 @@ class ChildCreationToolbar(
     private val actions = DefaultActionGroup().apply {
         add(splitAction)
         add(wireCreationAction)
-        add(magnetAction)
+        add(snapAction)
         add(diagramPropertiesAction)
         if (showCommit) { add(commitAction); add(rollbackAction) }
     }

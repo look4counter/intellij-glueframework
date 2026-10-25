@@ -778,7 +778,7 @@ class ModelDiagramPropertiesTest : BasePlatformTestCase() {
     fun testCreationControlUsesNativeActionToolbarAndSplitButton() {
         val session = open()
         assertTrue(descendants(session.editor.component).none { (it is JComboBox<*> && it.name != "model.zoom.select") || it is JToggleButton })
-        assertEquals(listOf(session.kind.splitAction, session.kind.wireCreationAction, session.kind.magnetAction, session.kind.diagramPropertiesAction), session.kind.toolbar.actions)
+        assertEquals(listOf(session.kind.splitAction, session.kind.wireCreationAction, session.kind.snapAction, session.kind.diagramPropertiesAction), session.kind.toolbar.actions)
         assertSame(session.canvas, session.kind.toolbar.targetComponent)
         assertTrue(session.kind.splitAction is com.intellij.openapi.actionSystem.SplitButtonAction)
         assertTrue(session.kind.toggleAction is com.intellij.openapi.actionSystem.ToggleAction)

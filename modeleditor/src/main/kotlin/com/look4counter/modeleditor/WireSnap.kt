@@ -4,7 +4,7 @@ import kotlin.math.ceil
 import kotlin.math.floor
 import kotlin.math.round
 
-object WireMagnet {
+object WireSnap {
     fun dragPosition(wire: DiagramWire, point: DiagramPoint): DiagramPoint {
         val nodes = listOfNotNull(wire.start, wire.end).filter { it.isActivity }
         fun snapped(horizontal: Boolean): Double {
