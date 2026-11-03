@@ -40,6 +40,57 @@ import javax.swing.JLabel
 import javax.swing.JRadioButtonMenuItem
 
 class ModelDiagramPropertiesTest : BasePlatformTestCase() {
+    private fun withoutWriteIntent(action: () -> Unit) {
+        val application = com.intellij.openapi.application.ApplicationManager.getApplication()
+            as com.intellij.openapi.application.impl.ApplicationImpl
+        application.threadingSupport.releaseTheAcquiredWriteIntentLockThenExecuteActionAndTakeWriteIntentLockBack {
+            assertTrue(application.isDispatchThread)
+            assertFalse(application.isWriteIntentLockAcquired)
+            action()
+        }
+        UIUtil.dispatchAllInvocationEvents()
+    }
+
+    fun testActivityEditFromUnlockedMouseEventSupportsCancelConfirmAndUndo() {
+        val session = open()
+        val original = session.document.text
+        dialogs.activity = {
+            assertTrue(com.intellij.openapi.application.ApplicationManager.getApplication().isWriteIntentLockAcquired)
+            assertEquals("A", it.name)
+            null
+        }
+        withoutWriteIntent { mouse(session.canvas, MouseEvent.MOUSE_CLICKED, 70, 55, 2) }
+        assertEquals(1, dialogs.activities)
+        assertEquals(original, session.document.text)
+        dialogs.activity = { it.copy(name = "Edited") }
+        withoutWriteIntent { mouse(session.canvas, MouseEvent.MOUSE_CLICKED, 70, 55, 2) }
+        assertEquals(2, dialogs.activities)
+        assertEquals("Edited", session.canvas.diagram.nodes.first().name)
+        checkUndoAndSave(session, original)
+    }
+
+    fun testTransitionAndDiagramEditFromUnlockedUiEvents() {
+        val session = open()
+        dialogs.condition = {
+            assertTrue(com.intellij.openapi.application.ApplicationManager.getApplication().isWriteIntentLockAcquired)
+            "updated"
+        }
+        withoutWriteIntent { mouse(session.canvas, MouseEvent.MOUSE_CLICKED, 195, 89, 2) }
+        assertEquals(1, dialogs.conditions)
+        assertEquals("updated", session.canvas.diagram.wires.single().condition)
+        var diagramRequests = 0
+        dialogs.diagram = {
+            assertTrue(com.intellij.openapi.application.ApplicationManager.getApplication().isWriteIntentLockAcquired)
+            diagramRequests++
+            null
+        }
+        withoutWriteIntent {
+            session.kind.diagramPropertiesAction.actionPerformed(AnActionEvent.createFromAnAction(
+                session.kind.diagramPropertiesAction, null, ActionPlaces.UNKNOWN, DataContext.EMPTY_CONTEXT))
+        }
+        assertEquals(1, diagramRequests)
+    }
+
     fun testSqlKeyCompletionUsesMemoryIdsAndInsertsOnlyId() {
         val query = myFixture.addFileToProject("queries/sample.glue_sql", """<queryMap><query id="sample.find-person" desc="사람 조회"/></queryMap>""")
         val initial = ActivityPropertiesData("A", listOf(ActivityProperty("sql-key", "sample.find-"),
@@ -420,7 +471,8 @@ class ModelDiagramPropertiesTest : BasePlatformTestCase() {
         assertEquals(stamp, session.document.modificationStamp)
         dialogs.condition = { "" }
         doubleClick(session.canvas, 195, 89)
-        assertEquals("", session.canvas.diagram.wires.single().condition)
+        assertEquals("", root(session).subTags.single { it.localName == "wire" }.getAttributeValue("guardcondition"))
+        assertEquals("success", session.canvas.diagram.wires.single().condition)
     }
 
     fun testActivityNamePropertiesDescriptionApplyTogetherAndPreserveOtherXml() {
@@ -775,12 +827,12 @@ class ModelDiagramPropertiesTest : BasePlatformTestCase() {
         assertTrue(panel.openClassMessage.text.contains("입력"))
     }
 
-    fun testCreationControlUsesNativeActionToolbarAndSplitButton() {
+    fun testCreationControlUsesNativeActionToolbarAndCustomControl() {
         val session = open()
         assertTrue(descendants(session.editor.component).none { (it is JComboBox<*> && it.name != "model.zoom.select") || it is JToggleButton })
         assertEquals(listOf(session.kind.splitAction, session.kind.wireCreationAction, session.kind.snapAction, session.kind.diagramPropertiesAction), session.kind.toolbar.actions)
         assertSame(session.canvas, session.kind.toolbar.targetComponent)
-        assertTrue(session.kind.splitAction is com.intellij.openapi.actionSystem.SplitButtonAction)
+        assertTrue(session.kind.splitAction is com.intellij.openapi.actionSystem.ex.CustomComponentAction)
         assertTrue(session.kind.toggleAction is com.intellij.openapi.actionSystem.ToggleAction)
         assertEquals(3, session.kind.splitAction.actionGroup.getChildren(null).size)
         performCreationAction(session.kind.kindActions[2])

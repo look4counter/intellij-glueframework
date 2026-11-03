@@ -17,7 +17,9 @@ class QuerySourceEditorProvider : FileEditorProvider, DumbAware {
     override fun accept(project: Project, file: VirtualFile): Boolean = file.fileType == GlueSqlFileType.INSTANCE
 
     override fun createEditor(project: Project, file: VirtualFile): FileEditor =
-        QuerySourceEditor(TextEditorProvider.getInstance().createEditor(project, file) as TextEditor)
+        com.intellij.openapi.application.ApplicationManager.getApplication().runWriteIntentReadAction<FileEditor, RuntimeException> {
+            QuerySourceEditor(TextEditorProvider.getInstance().createEditor(project, file) as TextEditor)
+        }
 
     override fun getEditorTypeId(): String = "glue-query-source"
     override fun getPolicy(): FileEditorPolicy = FileEditorPolicy.HIDE_DEFAULT_EDITOR

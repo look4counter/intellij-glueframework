@@ -5,6 +5,52 @@ import com.look4counter.modeleditor.*
 import java.awt.Color
 
 class ModelEditorSettingsTest : BasePlatformTestCase() {
+    fun testModificationPollingPreservesPendingPropertyEdits() {
+        val settings = ModelEditorSettings.getInstance(project)
+        settings.loadState(ModelEditorState(presets = mutableListOf(
+            ActivityPreset("Preset", mutableListOf(PresetProperty("key", "value"))), ActivityPreset("Other"))))
+        val configurable = GlueModelEditorConfigurable(project)
+        configurable.createComponent()
+        val panel = configurable.panel!!
+        val table = panel.editor!!.propertiesTable
+        for (column in 0..1) {
+            assertTrue(table.editCellAt(0, column))
+            val field = table.editorComponent as javax.swing.JTextField
+            val original = field.text
+            field.text = "pending"
+            field.select(1, 4)
+            repeat(10) {
+                assertTrue(configurable.isModified())
+                assertTrue(table.isEditing)
+                assertSame(field, table.editorComponent)
+                assertEquals(1, field.selectionStart)
+                assertEquals(4, field.selectionEnd)
+                assertEquals(original, table.model.getValueAt(0, column))
+            }
+            field.text = original
+            assertFalse(configurable.isModified())
+            assertTrue(table.isEditing)
+            table.cellEditor.cancelCellEditing()
+        }
+        assertTrue(table.editCellAt(0, 1))
+        (table.editorComponent as javax.swing.JTextField).text = "applied"
+        configurable.apply()
+        assertFalse(table.isEditing)
+        assertEquals("applied", settings.state.presets.first().properties.single().value)
+        assertTrue(table.editCellAt(0, 1))
+        (table.editorComponent as javax.swing.JTextField).text = "switched"
+        panel.list.selectedIndex = 1
+        panel.list.selectedIndex = 0
+        assertEquals("switched", panel.editor!!.propertiesModel.getValueAt(0, 1))
+        assertTrue(panel.editor!!.propertiesTable.editCellAt(0, 1))
+        (panel.editor!!.propertiesTable.editorComponent as javax.swing.JTextField).text = "discarded"
+        configurable.reset()
+        assertEquals("applied", panel.editor!!.propertiesModel.getValueAt(0, 1))
+        assertFalse(configurable.isModified())
+        assertEquals("Other", settings.state.presets[1].name)
+        configurable.disposeUIResources()
+    }
+
     fun testNoUseModelFileCheckboxApplyResetAndPersistence() {
         val settings = ModelEditorSettings.getInstance(project)
         val configurable = GlueModelEditorConfigurable(project)

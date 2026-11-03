@@ -17,7 +17,9 @@ class ModelSourceEditorProvider : FileEditorProvider, DumbAware {
     override fun accept(project: Project, file: VirtualFile): Boolean = file.fileType == GlueUmlAdFileType.INSTANCE || ServiceDiagramAdapter.accepts(project, file)
 
     override fun createEditor(project: Project, file: VirtualFile): FileEditor =
-        ModelSourceEditor(TextEditorProvider.getInstance().createEditor(project, file) as TextEditor)
+        com.intellij.openapi.application.ApplicationManager.getApplication().runWriteIntentReadAction<FileEditor, RuntimeException> {
+            ModelSourceEditor(TextEditorProvider.getInstance().createEditor(project, file) as TextEditor)
+        }
 
     override fun getEditorTypeId(): String = "glue-model-source"
     override fun getPolicy(): FileEditorPolicy = FileEditorPolicy.HIDE_DEFAULT_EDITOR

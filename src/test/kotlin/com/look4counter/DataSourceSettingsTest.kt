@@ -28,6 +28,51 @@ import javax.swing.JPasswordField
 import javax.swing.JTextField
 
 class DataSourceSettingsTest : BasePlatformTestCase() {
+    fun testConnectionButtonUsesUnsavedDraftAndPasswordPolicyWithoutSaving() {
+        val store = MemoryStore()
+        val manager = DataSourcePasswordManager("settings-test", store)
+        val source = DataSourceDefinition("saved", "Saved", "jdbc:postgresql://old/db", passwordStored = true)
+        settings.replaceDataSources(listOf(source))
+        background { manager.applyChanges(mapOf(source.id to "stored-secret")) }
+        val requests = mutableListOf<Pair<DataSourceDefinition, String?>>()
+        val results = mutableListOf<Boolean>()
+        var failure: Exception? = null
+        configurable = object : GlueQueryEditorConfigurable(project) {
+            override fun createPasswordManager() = manager
+            override fun testConnection(source: DataSourceDefinition, password: String?) {
+                assertFalse(ApplicationManager.getApplication().isDispatchThread)
+                requests.add(source to password)
+                failure?.let { throw it }
+            }
+            override fun showConnectionTestResult(success: Boolean) { results.add(success) }
+        }
+        val panel = configurable!!.createComponent()
+        configurable!!.reset()
+        val button = control<JButton>(panel, "datasource.testConnection")
+        assertTrue(button.isEnabled)
+        control<JTextField>(panel, "datasource.url").text = "jdbc:postgresql://unsaved/db"
+        button.doClick()
+        assertEquals("jdbc:postgresql://unsaved/db", requests.last().first.jdbcUrl)
+        assertEquals("stored-secret", requests.last().second)
+        control<JPasswordField>(panel, "datasource.password").text = "new-secret"
+        button.doClick()
+        assertEquals("new-secret", requests.last().second)
+        control<JPasswordField>(panel, "datasource.password").text = ""
+        control<JCheckBox>(panel, "datasource.clearPassword").isSelected = true
+        button.doClick()
+        assertNull(requests.last().second)
+        failure = java.sql.SQLException("must not display stored-secret")
+        button.doClick()
+        assertEquals(listOf(true, true, true, false), results)
+        failure = com.intellij.openapi.progress.ProcessCanceledException()
+        button.doClick()
+        assertEquals(4, results.size)
+        assertEquals(listOf(source), settings.dataSources)
+        assertEquals("stored-secret", store.values.values.single().getPasswordAsString())
+        control<JButton>(panel, "datasource.remove").doClick()
+        assertFalse(button.isEnabled)
+    }
+
     private var configurable: GlueQueryEditorConfigurable? = null
     private val settings get() = DataSourceSettingsService.getInstance(project)
 
@@ -83,8 +128,8 @@ class DataSourceSettingsTest : BasePlatformTestCase() {
         val group = com.intellij.openapi.options.ex.ConfigurableExtensionPointUtil.getConfigurableGroup(project, true)
         val framework = group.configurables.single { it.displayName == "GlueFramework" }
         assertTrue(framework is com.intellij.openapi.options.Configurable.Composite)
-        assertEquals(listOf("GlueQueryEditor"),
-            (framework as com.intellij.openapi.options.Configurable.Composite).configurables.map { it.displayName })
+        assertEquals(listOf("GlueModelEditor", "GlueQueryEditor"),
+            (framework as com.intellij.openapi.options.Configurable.Composite).configurables.map { it.displayName }.sorted())
     }
 
     fun testMultipleSourcesApplyResetDeleteAndCancel() {

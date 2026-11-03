@@ -1,6 +1,9 @@
 package com.look4counter.queryeditor
 
 import com.intellij.openapi.application.ReadAction
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.application.TransactionGuard
 import com.intellij.openapi.fileEditor.FileEditorManager
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.popup.JBPopupFactory
@@ -41,6 +44,8 @@ object QueryNavigation {
     }
 
     fun open(project: Project, id: String, file: VirtualFile? = null): Boolean {
+        if (project.isDisposed || id.isBlank() || file?.isValid == false) return false
+        if (deferOpen { open(project, id, file) }) return true
         val matches = find(project, id).filter { file == null || it.file == file }
         if (matches.isEmpty()) return false
         if (matches.size == 1) return open(project, matches.single())
@@ -51,12 +56,23 @@ object QueryNavigation {
 
     fun open(project: Project, location: QueryLocation): Boolean {
         if (project.isDisposed || !location.file.isValid) return false
+        if (deferOpen { open(project, location) }) return true
         val manager = FileEditorManager.getInstance(project)
         location.file.putUserData(requestedQuery, location.id)
         val editors = manager.openFile(location.file, true)
         manager.setSelectedEditor(location.file, "glue-query-design")
         if (editors.filterIsInstance<QueryEditorNavigation>().any { it.selectQuery(location.id) })
             location.file.putUserData(requestedQuery, null)
+        return true
+    }
+
+    private fun deferOpen(action: () -> Unit): Boolean {
+        val application = ApplicationManager.getApplication()
+        val guard = TransactionGuard.getInstance()
+        if (application.isDispatchThread && application.isWriteIntentLockAcquired && guard.isWritingAllowed) return false
+        val requested = ModalityState.defaultModalityState()
+        application.invokeLater(action,
+            if (guard.isWriteSafeModality(requested)) requested else ModalityState.nonModal())
         return true
     }
 }

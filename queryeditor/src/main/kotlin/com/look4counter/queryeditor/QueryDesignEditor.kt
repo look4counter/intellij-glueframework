@@ -2,6 +2,7 @@ package com.look4counter.queryeditor
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.application.TransactionGuard
 import com.intellij.openapi.command.CommandProcessor
 import com.intellij.openapi.editor.Document
 import com.intellij.openapi.editor.EditorFactory
@@ -42,6 +43,9 @@ import javax.swing.DefaultListCellRenderer
 import javax.swing.JList
 import javax.swing.BorderFactory
 import javax.swing.JComponent
+import javax.swing.JButton
+import java.awt.FlowLayout
+import com.intellij.icons.AllIcons
 import javax.swing.ListSelectionModel
 import javax.swing.event.DocumentEvent as SwingDocumentEvent
 import javax.swing.event.DocumentListener as SwingDocumentListener
@@ -68,6 +72,24 @@ internal class QueryDesignEditor(private val project: Project, private val file:
         accessibleContext.accessibleName = "queryMap desc"
     }
     private val status = JBLabel().apply { name = "query.status" }
+    private val listButtons = QueryListAction.entries.associateWith { action ->
+        JButton(when (action) {
+            QueryListAction.Add -> AllIcons.General.Add
+            QueryListAction.Delete -> AllIcons.General.Remove
+            QueryListAction.Duplicate -> AllIcons.Actions.Copy
+            QueryListAction.Up -> AllIcons.Actions.MoveUp
+            QueryListAction.Down -> AllIcons.Actions.MoveDown
+        }).apply {
+            name = "query.action.${action.name.lowercase()}"
+            toolTipText = action.label
+            accessibleContext.accessibleName = action.label
+            preferredSize = JBUI.size(32, 32)
+            minimumSize = preferredSize
+            margin = JBUI.insets(4)
+            isEnabled = false
+            addActionListener { performListAction(action, queryList.selectedValue?.target) }
+        }
+    }
     private val fields = listOf("id", "desc").associateWith { attribute ->
         JBTextField().apply { name = "query.$attribute" }
     }
@@ -90,6 +112,8 @@ internal class QueryDesignEditor(private val project: Project, private val file:
     private var applying = false
     private var scheduled = false
     private var disposed = false
+    private var selectionRevision = 0L
+    private var navigationRevision = 0L
     private var notice: String? = null
 
     private data class SqlBuffer(val target: SmartPsiElementPointer<XmlTag>, val document: Document, var original: String)
@@ -111,8 +135,7 @@ internal class QueryDesignEditor(private val project: Project, private val file:
         queryList.addListSelectionListener { event ->
             if (!updating && !event.valueIsAdjusting) {
                 val target = queryList.selectedValue?.target
-                flushPending()
-                refresh(target)
+                changeSelection(target, ++selectionRevision)
             }
         }
         fields.forEach { (attribute, input) ->
@@ -204,7 +227,13 @@ internal class QueryDesignEditor(private val project: Project, private val file:
             preferredSize = JBUI.size(320, 400)
             minimumSize = JBUI.size(220, 100)
             add(header, BorderLayout.NORTH)
-            add(JBScrollPane(queryList), BorderLayout.CENTER)
+            add(JBPanel<JBPanel<*>>(BorderLayout()).apply {
+                add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
+                    name = "query.actions"
+                    listButtons.values.forEach(::add)
+                }, BorderLayout.NORTH)
+                add(JBScrollPane(queryList), BorderLayout.CENTER)
+            }, BorderLayout.CENTER)
         }
     }
 
@@ -215,12 +244,51 @@ internal class QueryDesignEditor(private val project: Project, private val file:
         scheduleRefresh()
     }
 
+    private fun performListAction(action: QueryListAction, target: SmartPsiElementPointer<XmlTag>?) {
+        if (disposed || project.isDisposed) return
+        val application = ApplicationManager.getApplication()
+        val guard = TransactionGuard.getInstance()
+        if (!application.isDispatchThread || !application.isWriteIntentLockAcquired || !guard.isWritingAllowed) {
+            val requested = ModalityState.defaultModalityState()
+            application.invokeLater({ performListAction(action, target) },
+                if (guard.isWriteSafeModality(requested)) requested else ModalityState.nonModal())
+            return
+        }
+        flushPending()
+        PsiDocumentManager.getInstance(project).commitDocument(model.document)
+        val snapshot = model.snapshot()
+        if (!model.writable || snapshot.problem != null) return
+        val stamp = model.document.modificationStamp
+        val data = if (action == QueryListAction.Add) {
+            project.getService(QueryCreationDialogs::class.java).create(snapshot.queries.map { it.id }.toSet()) ?: return
+        } else null
+        if (disposed || project.isDisposed || model.document.modificationStamp != stamp || !model.writable) return
+        applying = true
+        val preferred = try { model.changeQueries(action, target, data) } finally { applying = false }
+        ++selectionRevision
+        refresh(preferred)
+    }
+
+    private fun changeSelection(target: SmartPsiElementPointer<XmlTag>?, revision: Long) {
+        if (disposed || project.isDisposed || revision != selectionRevision) return
+        val application = ApplicationManager.getApplication()
+        val guard = TransactionGuard.getInstance()
+        if (!application.isDispatchThread || !application.isWriteIntentLockAcquired || !guard.isWritingAllowed) {
+            val requestedModality = ModalityState.defaultModalityState()
+            val modality = if (guard.isWriteSafeModality(requestedModality)) requestedModality else ModalityState.nonModal()
+            application.invokeLater({ changeSelection(target, revision) }, modality)
+            return
+        }
+        flushPending()
+        refresh(target)
+    }
+
     private fun scheduleRefresh() {
-        if (disposed || scheduled) return
+        if (disposed || scheduled || !file.isValid || project.isDisposed) return
         scheduled = true
         ApplicationManager.getApplication().invokeLater({
             scheduled = false
-            if (!disposed && !project.isDisposed) {
+            if (!disposed && !project.isDisposed && file.isValid) {
                 flushPending()
                 refresh()
             }
@@ -240,7 +308,7 @@ internal class QueryDesignEditor(private val project: Project, private val file:
     }
 
     private fun refresh(preferred: SmartPsiElementPointer<XmlTag>? = selected?.target) {
-        if (disposed || project.isDisposed) return
+        if (disposed || project.isDisposed || !file.isValid) return
         PsiDocumentManager.getInstance(project).commitDocument(model.document)
         val snapshot = model.snapshot()
         val oldIndex = queryList.selectedIndex.coerceAtLeast(0)
@@ -264,6 +332,14 @@ internal class QueryDesignEditor(private val project: Project, private val file:
             selected = queryList.selectedValue
             val query = selected
             val editable = query != null && snapshot.problem == null && model.writable
+            listButtons.forEach { (action, button) ->
+                button.isEnabled = snapshot.problem == null && model.writable && when (action) {
+                    QueryListAction.Add -> true
+                    QueryListAction.Up -> query != null && queryList.selectedIndex > 0
+                    QueryListAction.Down -> query != null && queryList.selectedIndex < queryModel.size() - 1
+                    else -> query != null
+                }
+            }
             fields.forEach { (attribute, input) ->
                 val value = query?.attribute(attribute).orEmpty()
                 if (input.text != value) input.text = value
@@ -321,21 +397,36 @@ internal class QueryDesignEditor(private val project: Project, private val file:
     override fun getName(): String = "Design"
     override fun getFile(): VirtualFile = file
     override fun selectQuery(id: String): Boolean {
-        if (disposed || project.isDisposed) return false
+        return navigate(++navigationRevision, id = id)
+    }
+
+    private fun navigate(revision: Long, id: String? = null, offset: Int? = null): Boolean {
+        if (disposed || project.isDisposed || !file.isValid || revision != navigationRevision) return false
+        val application = ApplicationManager.getApplication()
+        val guard = TransactionGuard.getInstance()
+        if (!application.isDispatchThread || !application.isWriteIntentLockAcquired || !guard.isWritingAllowed) {
+            val requested = ModalityState.defaultModalityState()
+            application.invokeLater({ navigate(revision, id, offset) },
+                if (guard.isWriteSafeModality(requested)) requested else ModalityState.nonModal())
+            return true
+        }
+        ++selectionRevision
+        PsiDocumentManager.getInstance(project).commitDocument(model.document)
+        val queryId = id ?: QueryNavigation.queryAtOffset(project, file, offset ?: return false)?.let {
+            com.intellij.openapi.util.text.StringUtil.unescapeXmlEntities(it.getAttributeValue("id").orEmpty())
+        } ?: return false
         flushPending()
         refresh()
-        val index = (0 until queryModel.size()).firstOrNull { queryModel.getElementAt(it).id == id } ?: return false
+        val index = (0 until queryModel.size()).firstOrNull { queryModel.getElementAt(it).id == queryId } ?: return false
         queryList.selectedIndex = index
         queryList.ensureIndexIsVisible(index)
         return true
     }
     override fun selectQueryAtOffset(offset: Int): Boolean {
-        if (disposed || project.isDisposed) return false
-        PsiDocumentManager.getInstance(project).commitDocument(model.document)
-        val tag = QueryNavigation.queryAtOffset(project, file, offset) ?: return false
-        return selectQuery(com.intellij.openapi.util.text.StringUtil.unescapeXmlEntities(tag.getAttributeValue("id").orEmpty()))
+        return navigate(++navigationRevision, offset = offset)
     }
     override fun canNavigateTo(target: com.intellij.pom.Navigatable): Boolean {
+        if (disposed || project.isDisposed || !file.isValid) return false
         val descriptor = target as? com.intellij.openapi.fileEditor.OpenFileDescriptor ?: return false
         return descriptor.file == file && com.intellij.openapi.application.ReadAction.compute<Boolean, RuntimeException> {
             QueryNavigation.queryAtOffset(project, file, descriptor.offset) != null

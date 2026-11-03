@@ -49,6 +49,10 @@ internal data class QueryEdit(
     val value: String,
 )
 
+internal enum class QueryListAction(val label: String) {
+    Add("추가"), Delete("삭제"), Duplicate("복제"), Up("위로"), Down("아래로")
+}
+
 internal class QueryMapDocumentModel(private val project: Project, private val file: VirtualFile) {
     val document = requireNotNull(FileDocumentManager.getInstance().getDocument(file))
     val writable: Boolean get() = file.isValid && file.isWritable && document.isWritable
@@ -122,6 +126,58 @@ internal class QueryMapDocumentModel(private val project: Project, private val f
             manager.commitDocument(document)
         }
         return accepted
+    }
+
+    fun changeQueries(action: QueryListAction, target: SmartPsiElementPointer<XmlTag>?, data: NewQueryData? = null): SmartPsiElementPointer<XmlTag>? {
+        if (!writable) return null
+        val manager = PsiDocumentManager.getInstance(project)
+        manager.commitDocument(document)
+        val snapshot = snapshot()
+        val root = snapshot.target?.element ?: return null
+        if (snapshot.problem != null) return null
+        val queries = snapshot.queries.mapNotNull { it.target.element }
+        val tag = target?.element
+        val index = queries.indexOf(tag)
+        if (action != QueryListAction.Add && index < 0) return null
+        val ids = snapshot.queries.map { it.id }.toSet()
+        if (action == QueryListAction.Add && (data == null || data.validationError(ids) != null)) return null
+        if (action == QueryListAction.Up && index == 0 || action == QueryListAction.Down && index == queries.lastIndex) return target
+        var result: XmlTag? = null
+        WriteCommandAction.writeCommandAction(project).withName("Query ${action.label}").run<RuntimeException> {
+            result = when (action) {
+                QueryListAction.Add -> {
+                    val draft = root.createChildTag("query", root.namespace, "", false)
+                    draft.setAttribute("id", StringUtil.escapeXmlEntities(data!!.id.trim()))
+                    draft.setAttribute("desc", StringUtil.escapeXmlEntities(data.description))
+                    draft.setAttribute("resultType", StringUtil.escapeXmlEntities(data.resultType))
+                    draft.setAttribute("isNamed", data.isNamed.toString())
+                    root.addSubTag(draft, false)
+                }
+                QueryListAction.Delete -> {
+                    tag!!.delete()
+                    queries.filter { it !== tag }.getOrNull(index.coerceAtMost(queries.size - 2))
+                }
+                QueryListAction.Duplicate -> {
+                    val base = attribute(tag!!, "id").ifBlank { "query" } + "_copy"
+                    var id = base
+                    var suffix = 2
+                    while (id in ids) id = base + suffix++
+                    val copy = root.addAfter(tag.copy(), tag) as XmlTag
+                    copy.setAttribute("id", StringUtil.escapeXmlEntities(id))
+                    copy
+                }
+                QueryListAction.Up, QueryListAction.Down -> {
+                    val adjacent = queries[index + if (action == QueryListAction.Up) -1 else 1]
+                    val copy = (if (action == QueryListAction.Up) root.addBefore(tag!!.copy(), adjacent)
+                        else root.addAfter(tag!!.copy(), adjacent)) as XmlTag
+                    tag.delete()
+                    copy
+                }
+            }
+            manager.doPostponedOperationsAndUnblockDocument(document)
+            manager.commitDocument(document)
+        }
+        return result?.let { SmartPointerManager.getInstance(project).createSmartPsiElementPointer(it) }
     }
 
     private fun sql(tag: XmlTag): String = tag.value.textElements.joinToString("") { it.value }

@@ -163,7 +163,19 @@ class ActivityPropertiesPanel(data: ActivityPropertiesData, project: Project? = 
 
     fun result(): ActivityPropertiesData {
         propertiesTable.cellEditor?.stopCellEditing()
-        return ActivityPropertiesData(nameField.text, propertiesModel.rows.toList(), descriptionField.text)
+        return snapshot()
+    }
+
+    fun snapshot(): ActivityPropertiesData {
+        val properties = propertiesModel.rows.toMutableList()
+        if (propertiesTable.isEditing) {
+            val row = propertiesTable.convertRowIndexToModel(propertiesTable.editingRow)
+            val column = propertiesTable.convertColumnIndexToModel(propertiesTable.editingColumn)
+            val value = (propertiesTable.editorComponent as? javax.swing.text.JTextComponent)?.text
+                ?: propertiesTable.cellEditor.cellEditorValue?.toString().orEmpty()
+            properties[row] = if (column == 0) properties[row].copy(key = value) else properties[row].copy(value = value)
+        }
+        return ActivityPropertiesData(nameField.text, properties, descriptionField.text)
     }
 }
 

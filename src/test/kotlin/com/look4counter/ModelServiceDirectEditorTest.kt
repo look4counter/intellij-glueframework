@@ -39,6 +39,13 @@ class ModelServiceDirectEditorTest : BasePlatformTestCase() {
     private fun canvas(editor: FileEditor) = editor.component.components.filterIsInstance<JScrollPane>().single().viewport.view as ModelDiagramCanvas
     private fun source(file: com.intellij.openapi.vfs.VirtualFile) = PsiManager.getInstance(project).findFile(file) as XmlFile
 
+    private fun commit(editor: FileEditor) {
+        val toolbar = editor.component.components.filterIsInstance<ChildCreationToolbar>().single()
+        toolbar.commitAction.actionPerformed(com.intellij.openapi.actionSystem.AnActionEvent.createFromAnAction(
+            toolbar.commitAction, null, "test", com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT))
+        UIUtil.dispatchAllInvocationEvents()
+    }
+
     fun testServiceProjectionAndGeometryChangesDoNotModifySourceOrCreateModelFiles() {
         val file = myFixture.addFileToProject("services/direct-service.xml", xml()).virtualFile
         val document = FileDocumentManager.getInstance().getDocument(file)!!
@@ -139,6 +146,9 @@ class ModelServiceDirectEditorTest : BasePlatformTestCase() {
             assertEquals(before, document.text)
             canvas.onActivityEditRequested!!.invoke(canvas.diagram.nodes.first { it.name == "Router" })
             UIUtil.dispatchAllInvocationEvents()
+            assertEquals("Router", source(file).rootTag!!.getAttributeValue("initial"))
+            assertTrue(canvas.diagram.nodes.any { it.name == "Edited" })
+            commit(editor)
             assertEquals("Edited", source(file).rootTag!!.getAttributeValue("initial"))
             assertTrue(canvas.diagram.nodes.any { it.name == "Edited" })
             val undo = com.intellij.openapi.command.undo.UndoManager.getInstance(project)
@@ -153,6 +163,7 @@ class ModelServiceDirectEditorTest : BasePlatformTestCase() {
             val wire = canvas.diagram.wires.first { it.start?.name == "Edited" }
             canvas.onWireEditRequested!!.invoke(wire)
             UIUtil.dispatchAllInvocationEvents()
+            commit(editor)
             val actual = source(file).rootTag!!.subTags.first { it.localName == "activity" }
             assertEquals("updated", actual.subTags.first { it.localName == "transition" }.getAttributeValue("name"))
             val originalWire = canvas.diagram.wires.first { it.start?.name == "Edited" }
@@ -160,6 +171,8 @@ class ModelServiceDirectEditorTest : BasePlatformTestCase() {
             canvas.onWireEdited!!.invoke(originalWire, originalWire.copy(end = canvas.diagram.nodes.single { it.name == "Detached" }), null)
             UIUtil.dispatchAllInvocationEvents()
             assertFalse(canvas.diagram.wires.first { it.start?.name == "Edited" }.explicitContacts)
+            commit(editor)
+            assertTrue(canvas.diagram.wires.first { it.start?.name == "Edited" }.explicitContacts)
             assertEquals("Detached", actual.subTags.first { it.localName == "transition" }.getAttributeValue("value"))
             assertFalse(document.text.contains("location="))
         } finally { Disposer.dispose(editor); Disposer.dispose(textEditor) }
@@ -283,6 +296,8 @@ class ModelServiceDirectEditorTest : BasePlatformTestCase() {
             assertTrue(canvas.deleteProvider!!.canDeleteElement(context))
             canvas.deleteProvider!!.deleteElement(context)
             UIUtil.dispatchAllInvocationEvents()
+            assertFalse(source(file).rootTag!!.subTags.any { it.getAttributeValue("name") == "Router_2" })
+            commit(editor)
             val names = source(file).rootTag!!.subTags.filter { it.localName == "activity" }.map { it.getAttributeValue("name") }
             assertTrue("Router_2" in names)
             assertFalse("Router_2_2" in names)

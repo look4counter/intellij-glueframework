@@ -34,7 +34,7 @@ class GlueModelEditorConfigurable(private val project: Project) : SearchableConf
     override fun isModified() = panel?.let {
         val saved = ModelEditorSettings.getInstance(project).state
         saved.serviceDirectory = ServiceFiles.relativeDirectory(project, saved.serviceDirectory) ?: saved.serviceDirectory
-        it.value() != saved
+        it.value(commitEditing = false) != saved
     } ?: false
     override fun reset() { panel?.load(ModelEditorSettings.getInstance(project).state) }
     override fun apply() {
@@ -109,13 +109,16 @@ class ModelEditorSettingsPanel(private val project: Project) : JPanel(BorderLayo
         list.selectedIndex = model.size() - 1
     }
     private fun saveCurrent() {
-        val current = editor ?: return
         if (selected !in 0 until model.size()) return
-        val value = current.result()
+        currentPreset(true)?.let { model.set(selected, it) }
+    }
+    private fun currentPreset(commitEditing: Boolean): ActivityPreset? {
+        val current = editor ?: return null
+        val value = if (commitEditing) current.result() else current.snapshot()
         val chosen = color.selectedColor ?: Color.WHITE
-        model.set(selected, ActivityPreset(value.name, value.properties.map { PresetProperty(it.key, it.value) }.toMutableList(),
+        return ActivityPreset(value.name, value.properties.map { PresetProperty(it.key, it.value) }.toMutableList(),
             value.description, String.format("#%06X", chosen.rgb and 0xffffff),
-            String.format("#%06X", (foregroundColor.selectedColor ?: Color(145, 145, 145)).rgb and 0xffffff)))
+            String.format("#%06X", (foregroundColor.selectedColor ?: Color(145, 145, 145)).rgb and 0xffffff))
     }
     private fun showCurrent() {
         selected = list.selectedIndex
@@ -135,11 +138,12 @@ class ModelEditorSettingsPanel(private val project: Project) : JPanel(BorderLayo
         } else null
         detail.revalidate(); detail.repaint()
     }
-    fun value(): ModelEditorState {
-        saveCurrent()
+    fun value(commitEditing: Boolean = true): ModelEditorState {
+        val presets = (0 until model.size()).map { model.getElementAt(it).detached() }.toMutableList()
+        if (selected in presets.indices) currentPreset(commitEditing)?.let { presets[selected] = it }
         val directory = serviceDirectory.text.trim()
         return ModelEditorState(ServiceFiles.relativeDirectory(project, directory) ?: directory,
-            (0 until model.size()).map { model.getElementAt(it) }.toMutableList(), noUseGlueUmlAdFile.isSelected).detached()
+            presets, noUseGlueUmlAdFile.isSelected)
     }
     fun load(state: ModelEditorState) {
         loading = true

@@ -1,5 +1,9 @@
 <idea-plugin>
     <extensions defaultExtensionNs="com.intellij">
+        <psi.referenceContributor language="JAVA"
+                                  implementation="com.look4counter.queryeditor.JavaQueryReferenceContributor"/>
+        <projectService serviceInterface="com.look4counter.queryeditor.QueryCreationDialogs"
+                        serviceImplementation="com.look4counter.queryeditor.DefaultQueryCreationDialogs"/>
         <postStartupActivity implementation="com.look4counter.queryeditor.queryindex.QueryIdIndexStartupActivity"/>
         <postStartupActivity implementation="com.look4counter.queryeditor.database.DatabaseMetadataStartupActivity"/>
         <fileType name="Glue SQL"

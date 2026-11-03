@@ -2,14 +2,17 @@ package com.look4counter.modeleditor
 
 import com.intellij.icons.AllIcons
 import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionGroup
 import com.intellij.openapi.actionSystem.ActionToolbar
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.AnAction
 import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
-import com.intellij.openapi.actionSystem.SplitButtonAction
+import com.intellij.openapi.actionSystem.Presentation
 import com.intellij.openapi.actionSystem.ToggleAction
+import com.intellij.openapi.actionSystem.ex.CustomComponentAction
 import com.intellij.openapi.project.DumbAware
+import com.intellij.openapi.project.DumbAwareAction
 import java.awt.BorderLayout
 import javax.swing.JComponent
 import javax.swing.JPanel
@@ -125,35 +128,41 @@ class ChildCreationToolbar(
         refresh()
     }
 
-    val splitAction: SplitButtonAction = object : SplitButtonAction(kindGroup) {
-        override fun getMainAction(event: AnActionEvent): AnAction = toggleAction
-        override fun useDynamicSplitButton() = false
-        override fun isGroupPresentationDependsOnSelectedAction() = true
-        override fun createCustomComponent(presentation: com.intellij.openapi.actionSystem.Presentation, place: String): JComponent {
-            val menu = object : com.intellij.openapi.project.DumbAwareAction("종류 선택", "추가할 Child 선택", AllIcons.General.ArrowDown) {
-                override fun getActionUpdateThread() = ActionUpdateThread.EDT
-                override fun update(event: AnActionEvent) { event.presentation.isEnabled = canEdit() }
-                override fun actionPerformed(event: AnActionEvent) {
-                    val popup = com.intellij.openapi.ui.popup.JBPopupFactory.getInstance().createActionGroupPopup(
-                        null, kindGroup, event.dataContext,
-                        com.intellij.openapi.ui.popup.JBPopupFactory.ActionSelectionAid.SPEEDSEARCH, false)
-                    popup.addListener(object : com.intellij.openapi.ui.popup.JBPopupListener {
-                        override fun beforeShown(event: com.intellij.openapi.ui.popup.LightweightWindowEvent) {
-                            onCreationTrace?.invoke("POPUP_SHOW")
-                        }
-                        override fun onClosed(event: com.intellij.openapi.ui.popup.LightweightWindowEvent) {
-                            onCreationTrace?.invoke("POPUP_CLOSED accepted=${event.isOk}")
-                        }
-                    })
-                    popup.showUnderneathOf(event.inputEvent?.component as? JComponent ?: this@ChildCreationToolbar)
-                }
+    class CreationControlAction(
+        val actionGroup: ActionGroup,
+        private val mainAction: ToggleAction,
+        private val componentFactory: () -> JComponent,
+    ) : DumbAwareAction(), CustomComponentAction {
+        override fun getActionUpdateThread() = ActionUpdateThread.EDT
+        override fun update(event: AnActionEvent) = mainAction.update(event)
+        override fun actionPerformed(event: AnActionEvent) = mainAction.actionPerformed(event)
+        override fun createCustomComponent(presentation: Presentation, place: String) = componentFactory()
+    }
+
+    val splitAction = CreationControlAction(kindGroup, toggleAction) {
+        val menu = object : com.intellij.openapi.project.DumbAwareAction("종류 선택", "추가할 Child 선택", AllIcons.General.ArrowDown) {
+            override fun getActionUpdateThread() = ActionUpdateThread.EDT
+            override fun update(event: AnActionEvent) { event.presentation.isEnabled = canEdit() }
+            override fun actionPerformed(event: AnActionEvent) {
+                val popup = com.intellij.openapi.ui.popup.JBPopupFactory.getInstance().createActionGroupPopup(
+                    null, kindGroup, event.dataContext,
+                    com.intellij.openapi.ui.popup.JBPopupFactory.ActionSelectionAid.SPEEDSEARCH, false)
+                popup.addListener(object : com.intellij.openapi.ui.popup.JBPopupListener {
+                    override fun beforeShown(event: com.intellij.openapi.ui.popup.LightweightWindowEvent) {
+                        onCreationTrace?.invoke("POPUP_SHOW")
+                    }
+                    override fun onClosed(event: com.intellij.openapi.ui.popup.LightweightWindowEvent) {
+                        onCreationTrace?.invoke("POPUP_CLOSED accepted=${event.isOk}")
+                    }
+                })
+                popup.showUnderneathOf(event.inputEvent?.component as? JComponent ?: this@ChildCreationToolbar)
             }
-            return ActionManager.getInstance().createActionToolbar("GlueModelEditor.ChildChoice",
-                DefaultActionGroup(toggleAction, menu), true).apply {
-                targetComponent = target
-                setReservePlaceAutoPopupIcon(false)
-            }.component
         }
+        ActionManager.getInstance().createActionToolbar("GlueModelEditor.ChildChoice",
+            DefaultActionGroup(toggleAction, menu), true).apply {
+            targetComponent = target
+            setReservePlaceAutoPopupIcon(false)
+        }.component
     }
 
     val snapAction: ToggleAction = object : ToggleAction("Snap", "Wire 접점과 Child 이동·크기 조절의 보조선 및 정렬 붙이기", null), DumbAware {

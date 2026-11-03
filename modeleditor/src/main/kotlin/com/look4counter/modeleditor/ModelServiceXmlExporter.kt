@@ -17,32 +17,23 @@ object ModelServiceXmlExporter {
             "Child ID가 비어 있거나 중복됩니다."
         }
         val initial = diagram.nodes.filter { it.kind == DiagramNodeKind.InitialState }.singleOrNull()
-        require(initial != null && initial.outputs.size == 1 && initial.inputs.isEmpty()) { "InitialState는 하나이며 시작 연결도 하나여야 합니다." }
-        val reference = Regex("^//@wire\\.(\\d+)$")
-        children.forEach { child ->
-            for (attribute in listOf("input", "output")) {
-                val refs = child.getAttributeValue(attribute).orEmpty().split(Regex("\\s+")).filter { it.isNotEmpty() }
-                require(refs.distinct().size == refs.size && refs.all { token ->
-                    reference.matchEntire(token)?.groupValues?.get(1)?.toIntOrNull() in diagram.wires.indices
-                }) { "존재하지 않거나 중복된 Wire 참조가 있습니다." }
-            }
-        }
-        diagram.wires.forEach { wire ->
-            require(diagram.nodes.count { wire.index in it.outputs } == 1 && diagram.nodes.count { wire.index in it.inputs } == 1) {
-                "Wire ${wire.index}의 양쪽 Child 연결이 올바르지 않습니다."
-            }
-            require(wire.start?.kind != DiagramNodeKind.FinalState && wire.end?.kind != DiagramNodeKind.InitialState) {
-                "InitialState 입력 또는 FinalState 출력 연결은 지원하지 않습니다."
-            }
-        }
-        val first = diagram.wires[initial.outputs.single()].end
-        require(first?.isActivity == true) { "InitialState는 Activity에 연결되어야 합니다." }
+        require(initial != null) { "InitialState는 하나여야 합니다." }
+        val outputCounts = diagram.nodes.flatMap { it.outputs }.groupingBy { it }.eachCount()
+        val inputCounts = diagram.nodes.flatMap { it.inputs }.groupingBy { it }.eachCount()
+        val validWires = diagram.wires.filter { wire ->
+            val start = wire.start
+            val end = wire.end
+            outputCounts[wire.index] == 1 && inputCounts[wire.index] == 1 && start != null && end != null &&
+                ((start.kind == DiagramNodeKind.InitialState && end.isActivity) ||
+                    (start.isActivity && (end.isActivity || end.kind == DiagramNodeKind.FinalState)))
+        }.associateBy { it.index }
+        val first = initial.outputs.mapNotNull(validWires::get).singleOrNull()?.end
         val activities = diagram.nodes.filter { it.isActivity }
         require(activities.all { it.name.isNotBlank() } && activities.map { it.name }.distinct().size == activities.size) {
             "Activity Name이 비어 있거나 중복됩니다."
         }
         fun element(name: String) = Element(name, namespace)
-        val service = element("service").setAttribute("name", "$baseName-service").setAttribute("initial", first!!.name)
+        val service = element("service").setAttribute("name", "$baseName-service").setAttribute("initial", first?.name.orEmpty())
         diagram.properties.filter { it.key != "description" }.forEach { property ->
             require(property.key.isNotBlank() && property.value in listOf("true", "false")) {
                 "Diagram property ${property.key}의 값은 true 또는 false여야 합니다."
@@ -56,8 +47,7 @@ object ModelServiceXmlExporter {
             }
             require(properties.count { it.key == "class" } == 1 && node.className.isNotBlank()) { "${node.name}의 class가 없습니다." }
             val activity = element("activity").setAttribute("name", node.name).setAttribute("class", node.className)
-            val transitions = node.outputs.map { index ->
-                val wire = diagram.wires[index]
+            val transitions = node.outputs.mapNotNull(validWires::get).map { wire ->
                 val target = requireNotNull(wire.end)
                 wire.condition to if (target.kind == DiagramNodeKind.FinalState) "end" else target.name
             }

@@ -24,6 +24,11 @@ import javax.swing.JCheckBox
 import javax.swing.JLabel
 import javax.swing.JList
 import javax.swing.JTextField
+import javax.swing.JButton
+import com.intellij.testFramework.replaceService
+import com.look4counter.queryeditor.NewQueryData
+import com.look4counter.queryeditor.QueryCreationDialogs
+import com.look4counter.queryeditor.QueryCreationPanel
 
 class QueryDesignEditorTest : BasePlatformTestCase() {
     private lateinit var design: FileEditor
@@ -56,6 +61,181 @@ class QueryDesignEditorTest : BasePlatformTestCase() {
     private fun sql(): EditorTextField = control("query.sql")
     private fun input(name: String): JTextField = control("query.$name")
     private fun drain() = UIUtil.dispatchAllInvocationEvents()
+    private fun action(name: String): JButton = control("query.action.$name")
+    private fun clickAction(name: String) { action(name).doClick(0); drain() }
+    private fun creation(result: (Set<String>) -> NewQueryData?) {
+        project.replaceService(QueryCreationDialogs::class.java, object : QueryCreationDialogs {
+            override fun create(existingIds: Set<String>) = result(existingIds)
+        }, testRootDisposable)
+    }
+    private fun checkStructureUndo(change: () -> Unit) {
+        val source = FileEditorProviderManager.getInstance().getProviderList(project, design.file!!)
+            .single { it.editorTypeId == "glue-query-source" }.createEditor(project, design.file!!) as TextEditor
+        try {
+            val before = document().text
+            change()
+            val after = document().text
+            assertTrue(before != after)
+            UndoManager.getInstance(project).undo(source)
+            drain()
+            assertEquals(before, document().text)
+            UndoManager.getInstance(project).redo(source)
+            drain()
+            assertEquals(after, document().text)
+        } finally { Disposer.dispose(source) }
+    }
+
+    fun testQueryCreationPanelValidatesAndCollectsFourFields() {
+        val panel = QueryCreationPanel()
+        assertNotNull(panel.result().validationError(emptySet()))
+        assertFalse(panel.result().isNamed)
+        panel.id.text = " first "
+        assertNotNull(panel.result().validationError(setOf("first")))
+        panel.id.text = " third "
+        panel.description.text = "A & B"
+        panel.resultType.text = "sample.Result"
+        panel.isNamed.isSelected = true
+        assertEquals(NewQueryData("third", "A & B", "sample.Result", true), panel.result())
+        assertNull(panel.result().validationError(setOf("first")))
+    }
+
+    fun testToolbarIconsRenderAndCreationFormLayout() {
+        com.intellij.openapi.util.IconLoader.activate()
+        try {
+            openDesign(XML)
+            val icons = mapOf(
+                "add" to (com.intellij.icons.AllIcons.General.Add to "general/add.svg"),
+                "delete" to (com.intellij.icons.AllIcons.General.Remove to "general/remove.svg"),
+                "duplicate" to (com.intellij.icons.AllIcons.Actions.Copy to "actions/copy.svg"),
+                "up" to (com.intellij.icons.AllIcons.Actions.MoveUp to "actions/moveUp.svg"),
+                "down" to (com.intellij.icons.AllIcons.Actions.MoveDown to "actions/moveDown.svg"))
+            icons.forEach { (name, resource) ->
+                val button = action(name)
+                assertSame(resource.first, button.icon)
+                // 테스트 환경의 빈 플랫폼 아이콘 대신 같은 SVG 리소스를 직접 읽어 표시를 검증한다.
+                button.icon = com.intellij.ui.icons.CoreIconManager().getIcon("/${resource.second}", com.intellij.icons.AllIcons::class.java)
+                val icon = button.icon
+                val image = java.awt.image.BufferedImage(icon.iconWidth, icon.iconHeight, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+                val graphics = image.createGraphics()
+                try { icon.paintIcon(button, graphics, 0, 0) } finally { graphics.dispose() }
+                assertTrue("아이콘에 표시할 픽셀이 있어야 합니다: $name", (0 until image.height).any { y ->
+                    (0 until image.width).any { x -> image.getRGB(x, y) ushr 24 != 0 }
+                })
+            }
+            fun render(component: javax.swing.JComponent, width: Int, height: Int, file: String) {
+                component.setSize(width, height)
+                repeat(3) { descendants(component).filterIsInstance<Container>().forEach { it.doLayout() } }
+                val image = java.awt.image.BufferedImage(width, height, java.awt.image.BufferedImage.TYPE_INT_ARGB)
+                val graphics = image.createGraphics()
+                try { component.paint(graphics) } finally { graphics.dispose() }
+                javax.imageio.ImageIO.write(image, "png", Path.of(".gradle-validation", file).toFile())
+            }
+            render(control("query.actions"), 310, 36, "query-list-actions.png")
+            val form = QueryCreationPanel()
+            form.id.text = "sample.find"
+            form.description.text = "검색 쿼리"
+            form.resultType.text = "sample.Result"
+            form.isNamed.isSelected = true
+            render(form.component, 400, 160, "query-creation-form.png")
+        } finally { com.intellij.openapi.util.IconLoader.deactivate() }
+    }
+
+    fun testIconButtonsAndAddPopupConfirmCancelAndValidation() {
+        openDesign(XML)
+        listOf("add", "delete", "duplicate", "up", "down").forEach {
+            val button = action(it)
+            assertNotNull(button.icon)
+            assertTrue(button.text.isNullOrEmpty())
+            assertFalse(button.toolTipText.isNullOrBlank())
+            assertEquals(button.toolTipText, button.accessibleContext.accessibleName)
+        }
+        val original = document().text
+        creation { ids -> assertEquals(setOf("first", "second"), ids); null }
+        clickAction("add")
+        assertEquals(original, document().text)
+        creation { NewQueryData("first") }
+        clickAction("add")
+        assertEquals(original, document().text)
+        creation { NewQueryData("third", "한글 & <설명>", "sample.Result", true) }
+        checkStructureUndo { clickAction("add") }
+        assertEquals(listOf("first", "second", "third"), queries().map { it.getAttributeValue("id") })
+        val added = queries().last()
+        assertEquals("한글 & <설명>", added.getAttribute("desc")!!.displayValue)
+        assertEquals("sample.Result", added.getAttributeValue("resultType"))
+        assertEquals("true", added.getAttributeValue("isNamed"))
+        assertEquals("", sqlOf(added))
+        assertEquals("urn:query", added.namespace)
+        assertTrue(document().text.contains("<!-- preserve -->"))
+    }
+
+    fun testDuplicateMoveDeleteAndEachOperationUndo() {
+        openDesign(XML)
+        assertFalse(action("up").isEnabled)
+        assertTrue(action("down").isEnabled)
+        checkStructureUndo { clickAction("duplicate") }
+        assertEquals(listOf("first", "first_copy", "second"), queries().map { it.getAttributeValue("id") })
+        assertEquals("select 1", sqlOf(queries()[1]))
+        list().selectedIndex = 1
+        checkStructureUndo { clickAction("down") }
+        assertEquals(listOf("first", "second", "first_copy"), queries().map { it.getAttributeValue("id") })
+        list().selectedIndex = 2
+        assertFalse(action("down").isEnabled)
+        checkStructureUndo { clickAction("up") }
+        assertEquals(listOf("first", "first_copy", "second"), queries().map { it.getAttributeValue("id") })
+        list().selectedIndex = 1
+        checkStructureUndo { clickAction("delete") }
+        assertEquals(listOf("first", "second"), queries().map { it.getAttributeValue("id") })
+        list().selectedIndex = 0
+        clickAction("duplicate")
+        list().selectedIndex = 0
+        clickAction("duplicate")
+        assertEquals(listOf("first", "first_copy2", "first_copy", "second"), queries().map { it.getAttributeValue("id") })
+    }
+
+    fun testListActionsPreservePendingEditsAndComplexQueryContentsWithoutWriteIntent() {
+        openDesign(XML.replace("<![CDATA[select 1]]>", "<![CDATA[select 1]]><!-- inside --><extra value=\"keep\"/>"))
+        input("desc").text = "edited before copy"
+        withoutWriteIntent { action("duplicate").doClick(0) }
+        val copied = queries()[1]
+        assertEquals("first_copy", copied.getAttributeValue("id"))
+        assertEquals("edited before copy", copied.getAttributeValue("desc"))
+        assertTrue(copied.text.contains("<![CDATA[select 1]]>"))
+        assertTrue(copied.text.contains("<!-- inside -->"))
+        assertEquals("keep", copied.subTags.single().getAttributeValue("value"))
+        val copyText = copied.text
+        withoutWriteIntent { action("down").doClick(0) }
+        assertEquals(copyText, queries()[2].text)
+        assertEquals("first_copy", input("id").text)
+        withoutWriteIntent { action("delete").doClick(0) }
+        assertEquals("second", input("id").text)
+        assertEquals("edited before copy", queries()[0].getAttributeValue("desc"))
+    }
+
+    fun testEmptyReadonlyInvalidAndConcurrentAddAreProtected() {
+        openDesign(XML)
+        creation {
+            WriteCommandAction.runWriteCommandAction(project) { document().insertString(document().textLength, "\n") }
+            NewQueryData("stale")
+        }
+        clickAction("add")
+        assertEquals(2, queries().size)
+        WriteCommandAction.runWriteCommandAction(project) { design.file!!.isWritable = false }
+        drain()
+        assertTrue(listOf("add", "delete", "duplicate", "up", "down").all { !action(it).isEnabled })
+        WriteCommandAction.runWriteCommandAction(project) { design.file!!.isWritable = true }
+        drain()
+        clickAction("delete")
+        clickAction("delete")
+        assertEquals(0, list().model.size)
+        assertTrue(action("add").isEnabled)
+        assertFalse(action("delete").isEnabled)
+        creation { NewQueryData("new") }
+        withoutWriteIntent { action("add").doClick(0) }
+        assertEquals("new", input("id").text)
+        WriteCommandAction.runWriteCommandAction(project) { document().setText("<queryMap><query") }
+        drain()
+        assertTrue(listOf("add", "delete", "duplicate", "up", "down").all { !action(it).isEnabled })
+    }
     private fun document() = FileDocumentManager.getInstance().getDocument(design.file!!)!!
 
     private fun root(): XmlTag {
@@ -79,6 +259,67 @@ class QueryDesignEditorTest : BasePlatformTestCase() {
             assertFalse(guard.isWritingAllowed)
             action()
         }
+    }
+
+    private fun withoutWriteIntent(action: () -> Unit) {
+        val application = com.intellij.openapi.application.ApplicationManager.getApplication() as
+            com.intellij.openapi.application.impl.ApplicationImpl
+        application.threadingSupport.releaseTheAcquiredWriteIntentLockThenExecuteActionAndTakeWriteIntentLockBack {
+            assertTrue(application.isDispatchThread)
+            assertFalse(application.isWriteIntentLockAcquired)
+            action()
+        }
+        drain()
+    }
+
+    fun testListSelectionWithoutWriteIntentDisplaysSelectedQuery() {
+        openDesign(XML.replace("desc=\"two\" resultType=\"\"", "desc=\"two\" resultType=\"sample.Second\""))
+        val before = document().text
+        withoutWriteIntent { list().selectedIndex = 1 }
+        assertEquals(1, list().selectedIndex)
+        assertEquals("second", input("id").text)
+        assertEquals("two", input("desc").text)
+        assertEquals("sample.Second", control<EditorTextField>("query.resultType").text)
+        assertEquals("select 2", sql().text)
+        assertEquals(before, document().text)
+    }
+
+    fun testUnlockedSelectionKeepsPendingEditsOnOriginalQueryAndLatestSelection() {
+        openDesign(XML)
+        input("desc").text = "first updated"
+        WriteCommandAction.runWriteCommandAction(project) { sql().document.setText("select first") }
+        withoutWriteIntent {
+            list().selectedIndex = 1
+            list().selectedIndex = 0
+            list().selectedIndex = 1
+        }
+        assertEquals("first updated", queries()[0].getAttributeValue("desc"))
+        assertEquals("select first", sqlOf(queries()[0]))
+        assertEquals("two", queries()[1].getAttributeValue("desc"))
+        assertEquals("select 2", sqlOf(queries()[1]))
+        assertEquals(1, list().selectedIndex)
+        assertEquals("second", input("id").text)
+        assertEquals("select 2", sql().text)
+    }
+
+    fun testSelectionDefersFromWriteUnsafeContext() {
+        openDesign(XML)
+        input("desc").text = "first updated"
+        inWriteUnsafeContext { list().selectedIndex = 1 }
+        drain()
+        assertEquals("first updated", queries()[0].getAttributeValue("desc"))
+        assertEquals("second", input("id").text)
+    }
+
+    fun testDisposedEditorSkipsUnlockedSelection() {
+        openDesign(XML)
+        val before = document().text
+        withoutWriteIntent {
+            list().selectedIndex = 1
+            Disposer.dispose(design)
+        }
+        assertEquals("first", input("id").text)
+        assertEquals(before, document().text)
     }
 
     fun testCreationDefersCommitFromWriteUnsafeContext() {

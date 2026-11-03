@@ -13,6 +13,62 @@ import java.sql.DatabaseMetaData
 import java.sql.ResultSet
 
 class DatabaseMetadataTest : BasePlatformTestCase() {
+    fun testOracleMetadataUsesTwoDictionaryQueriesAndKeepsSchemasViewsAndColumnOrder() {
+        val queries = mutableListOf<String>()
+        var resultsClosed = 0
+        var statementsClosed = 0
+        val connection = proxy<Connection> { method, _ -> when (method) {
+            "createStatement" -> proxy<java.sql.Statement> { name, args -> when (name) {
+                "setFetchSize", "setQueryTimeout" -> null
+                "executeQuery" -> {
+                    val sql = args[0] as String
+                    queries.add(sql)
+                    val rows = if (sql.contains("ALL_TABLES")) {
+                        assertTrue(sql.contains("ALL_VIEWS"))
+                        listOf(mapOf("OWNER" to "A", "TABLE_NAME" to "EMP_%"),
+                            mapOf("OWNER" to "B", "TABLE_NAME" to "EMP_%"),
+                            mapOf("OWNER" to "A", "TABLE_NAME" to "EMP_VIEW"))
+                    } else {
+                        assertTrue(sql.contains("ALL_TAB_COLUMNS"))
+                        assertTrue(sql.contains("COLUMN_ID"))
+                        listOf(mapOf("OWNER" to "A", "TABLE_NAME" to "EMP_%", "COLUMN_NAME" to "Z_ID"),
+                            mapOf("OWNER" to "A", "TABLE_NAME" to "EMP_%", "COLUMN_NAME" to "A_NAME"),
+                            mapOf("OWNER" to "B", "TABLE_NAME" to "EMP_%", "COLUMN_NAME" to "OTHER"),
+                            mapOf("OWNER" to "A", "TABLE_NAME" to "EMP_VIEW", "COLUMN_NAME" to "VIEW_ID"))
+                    }
+                    var index = -1
+                    proxy<ResultSet> { action, values -> when (action) {
+                        "next" -> ++index < rows.size
+                        "getString" -> rows[index][values[0]]
+                        "close" -> { resultsClosed++; null }
+                        else -> error(action)
+                    } }
+                }
+                "close" -> { statementsClosed++; null }
+                else -> error(name)
+            } }
+            else -> error("Oracle must not use generic JDBC metadata: $method")
+        } }
+        val snapshot = JdbcMetadataReader().readConnection(connection,
+            com.look4counter.queryeditor.settings.DatabaseKind.ORACLE) {}
+        assertEquals(2, queries.size)
+        assertEquals(3, snapshot.tables.size)
+        assertEquals(listOf("Z_ID", "A_NAME"), snapshot.tables.single { it.schema == "A" && it.name == "EMP_%" }.columns)
+        assertEquals(listOf("OTHER"), snapshot.tables.single { it.schema == "B" }.columns)
+        assertEquals(listOf("VIEW_ID"), snapshot.tables.single { it.name == "EMP_VIEW" }.columns)
+        assertTrue(snapshot.tables.all { it.catalog == null })
+        assertEquals(2, resultsClosed)
+        assertEquals(2, statementsClosed)
+        var checks = 0
+        assertThrows(com.intellij.openapi.progress.ProcessCanceledException::class.java) {
+            JdbcMetadataReader().readConnection(connection, com.look4counter.queryeditor.settings.DatabaseKind.ORACLE) {
+                if (++checks == 3) throw com.intellij.openapi.progress.ProcessCanceledException()
+            }
+        }
+        assertEquals(3, resultsClosed)
+        assertEquals(3, statementsClosed)
+    }
+
     private val settings get() = DataSourceSettingsService.getInstance(project)
     override fun tearDown() {
         try { settings.replaceDataSources(emptyList()) } finally { super.tearDown() }
@@ -162,6 +218,19 @@ class DatabaseMetadataTest : BasePlatformTestCase() {
             System.clearProperty("glue.test.closed")
             System.clearProperty("glue.test.deregistered")
             System.setProperty("glue.test.fail", "true")
+            reader.testConnection(source, "secret-value") {}
+            assertEquals("true", System.getProperty("glue.test.closed"))
+            assertEquals("true", System.getProperty("glue.test.deregistered"))
+            assertSame(originalLoader, Thread.currentThread().contextClassLoader)
+            System.clearProperty("glue.test.closed")
+            var checks = 0
+            assertThrows(com.intellij.openapi.progress.ProcessCanceledException::class.java) {
+                reader.testConnection(source, "secret-value") {
+                    if (++checks == 3) throw com.intellij.openapi.progress.ProcessCanceledException()
+                }
+            }
+            assertEquals("true", System.getProperty("glue.test.closed"))
+            assertSame(originalLoader, Thread.currentThread().contextClassLoader)
             assertThrows(java.sql.SQLException::class.java) { reader.read(source, "secret-value") {} }
             assertEquals("true", System.getProperty("glue.test.closed"))
             assertEquals("true", System.getProperty("glue.test.deregistered"))

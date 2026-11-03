@@ -40,7 +40,10 @@ import java.math.BigInteger
 
 class ModelDesignEditorProvider : FileEditorProvider, DumbAware {
     override fun accept(project: Project, file: VirtualFile): Boolean = file.fileType == GlueUmlAdFileType.INSTANCE || ServiceDiagramAdapter.accepts(project, file)
-    override fun createEditor(project: Project, file: VirtualFile): FileEditor = ModelDesignEditor(project, file)
+    override fun createEditor(project: Project, file: VirtualFile): FileEditor =
+        com.intellij.openapi.application.ApplicationManager.getApplication().runWriteIntentReadAction<FileEditor, RuntimeException> {
+            ModelDesignEditor(project, file)
+        }
     override fun getEditorTypeId(): String = "glue-model-design"
     override fun getPolicy(): FileEditorPolicy = FileEditorPolicy.PLACE_BEFORE_DEFAULT_EDITOR
 }
@@ -122,7 +125,7 @@ private class ModelDesignEditor(private val project: Project, private val file: 
         project.messageBus.connect(this).subscribe(ModelEditorSettingsListener.TOPIC, object : ModelEditorSettingsListener {
             override fun settingsChanged() {
                 ApplicationManager.getApplication().invokeLater {
-                    if (!disposed && !project.isDisposed) { creationToolbar.refreshPresets(); canvas.repaint() }
+                    if (!disposed && !project.isDisposed) { creationToolbar.refreshPresets(); canvas.invalidateAppearance() }
                 }
             }
         })
@@ -216,6 +219,18 @@ private class ModelDesignEditor(private val project: Project, private val file: 
 
     private fun canEditStructure() = canEditDocument()
 
+    private fun deferModelEdit(action: () -> Unit): Boolean {
+        val application = ApplicationManager.getApplication()
+        val guard = TransactionGuard.getInstance()
+        if (application.isDispatchThread && application.isWriteIntentLockAcquired && guard.isWritingAllowed) return false
+        val requestedModality = ModalityState.defaultModalityState()
+        val modality = if (guard.isWriteSafeModality(requestedModality)) requestedModality else ModalityState.nonModal()
+        application.invokeLater({
+            if (!disposed && !project.isDisposed && file.isValid) action()
+        }, modality)
+        return true
+    }
+
     private fun uniqueServiceActivityName(wanted: String, used: MutableSet<String>): String {
         var candidate = wanted
         var suffix = 2
@@ -225,6 +240,7 @@ private class ModelDesignEditor(private val project: Project, private val file: 
     }
 
     private fun editCondition(wire: DiagramWire) {
+        if (deferModelEdit { editCondition(wire) }) return
         if (!canEditStructure()) return
         if (!wire.canEditCondition) return
         val source = document ?: return
@@ -244,6 +260,7 @@ private class ModelDesignEditor(private val project: Project, private val file: 
     }
 
     private fun editDiagram() {
+        if (deferModelEdit { editDiagram() }) return
         val source = document ?: return
         if (!canEditDocument() || scheduled || canvas.isDragging || canvas.creationKind != null || canvas.wireCreationMode) return
         PsiDocumentManager.getInstance(project).commitDocument(source)
@@ -283,6 +300,7 @@ private class ModelDesignEditor(private val project: Project, private val file: 
     }
 
     private fun editActivity(node: DiagramNode) {
+        if (deferModelEdit { editActivity(node) }) return
         val source = document ?: return
         if (!node.isActivity || !canEditStructure() || scheduled || canvas.isDragging || canvas.creationKind != null || canvas.wireCreationMode) return
         PsiDocumentManager.getInstance(project).commitDocument(source)
@@ -571,10 +589,11 @@ private class ModelDesignEditor(private val project: Project, private val file: 
         canvas.selectNodesByIds(pastedIds)
     }
 
-    private fun editWire(original: DiagramWire, edited: DiagramWire, removedBendpoint: Int?) {
-        if (!canEditStructure()) return
+    private fun editWire(original: DiagramWire, edited: DiagramWire, removedBendpoint: Int?, expectedStamp: Long = moveStamp) {
+        if (deferModelEdit { editWire(original, edited, removedBendpoint, expectedStamp) }) return
+        if (!canEditStructure()) { refresh(); return }
         val source = document ?: return
-        if (!source.isWritable || !file.isWritable || source.modificationStamp != moveStamp) { refresh(); return }
+        if (!source.isWritable || !file.isWritable || source.modificationStamp != expectedStamp) { refresh(); return }
         PsiDocumentManager.getInstance(project).commitDocument(source)
         val xml = modelXml() ?: return
         val root = xml.rootTag ?: return
@@ -638,10 +657,11 @@ private class ModelDesignEditor(private val project: Project, private val file: 
         refresh()
     }
 
-    private fun editNodes(editsByNode: Map<DiagramNode, DiagramNode>) {
-        if (!canEditStructure()) return
+    private fun editNodes(editsByNode: Map<DiagramNode, DiagramNode>, expectedStamp: Long = moveStamp) {
+        if (deferModelEdit { editNodes(editsByNode, expectedStamp) }) return
+        if (!canEditStructure()) { refresh(); return }
         val source = document ?: return
-        if (!source.isWritable || !file.isWritable || source.modificationStamp != moveStamp) {
+        if (!source.isWritable || !file.isWritable || source.modificationStamp != expectedStamp) {
             refresh()
             return
         }
@@ -718,7 +738,8 @@ private class ModelDesignEditor(private val project: Project, private val file: 
 
     private fun refresh(preserveOrigin: Boolean = false) {
         if (disposed || !file.isValid || project.isDisposed) return
-        if (!ApplicationManager.getApplication().isDispatchThread || !TransactionGuard.getInstance().isWritingAllowed) {
+        if (!ApplicationManager.getApplication().isDispatchThread ||
+            !ApplicationManager.getApplication().isWriteIntentLockAcquired || !TransactionGuard.getInstance().isWritingAllowed) {
             requestRefresh(preserveOrigin)
             return
         }

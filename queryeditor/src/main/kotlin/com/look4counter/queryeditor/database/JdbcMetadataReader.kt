@@ -18,7 +18,15 @@ data class MetadataSnapshot(val tables: List<TableMetadata>) {
 }
 
 class JdbcMetadataReader {
-    fun read(source: DataSourceDefinition, password: String?, checkCanceled: () -> Unit = { ProgressManager.checkCanceled() }): MetadataSnapshot {
+    fun read(source: DataSourceDefinition, password: String?, checkCanceled: () -> Unit = { ProgressManager.checkCanceled() }): MetadataSnapshot =
+        withConnection(source, password, checkCanceled) { readConnection(it, DatabaseKind.of(source), checkCanceled) }
+
+    fun testConnection(source: DataSourceDefinition, password: String?, checkCanceled: () -> Unit = { ProgressManager.checkCanceled() }) {
+        withConnection(source, password, checkCanceled) { checkCanceled() }
+    }
+
+    private fun <T> withConnection(source: DataSourceDefinition, password: String?, checkCanceled: () -> Unit,
+                                   action: (Connection) -> T): T {
         checkCanceled()
         require(source.driverJars.isNotEmpty()) { "JDBC JAR required" }
         val urls = source.driverJars.map { Path.of(it).also { path -> require(Files.isRegularFile(path)) }.toUri().toURL() }.toTypedArray()
@@ -46,8 +54,9 @@ class JdbcMetadataReader {
                         DatabaseKind.IMPALA -> setProperty("SocketTimeout", "30")
                     }
                 }
+                checkCanceled()
                 val connection = requireNotNull(driver.connect(source.jdbcUrl, properties)) { "Driver does not accept JDBC URL" }
-                connection.use { return readConnection(it, checkCanceled) }
+                connection.use { checkCanceled(); return action(it) }
             } finally {
                 try {
                     // Some drivers self-register from static initializers. Release those global references too.
@@ -55,6 +64,35 @@ class JdbcMetadataReader {
                 } finally { thread.contextClassLoader = previous }
             }
         }
+    }
+
+    fun readConnection(connection: Connection, kind: DatabaseKind,
+                       checkCanceled: () -> Unit = { ProgressManager.checkCanceled() }): MetadataSnapshot =
+        if (kind == DatabaseKind.ORACLE) readOracleConnection(connection, checkCanceled) else readConnection(connection, checkCanceled)
+
+    private fun readOracleConnection(connection: Connection, checkCanceled: () -> Unit): MetadataSnapshot {
+        val objects = linkedMapOf<Pair<String, String>, LinkedHashSet<String>>()
+        fun query(sql: String, row: (java.sql.ResultSet) -> Unit) {
+            checkCanceled()
+            connection.createStatement().use { statement ->
+                statement.queryTimeout = 30
+                statement.fetchSize = 1000
+                statement.executeQuery(sql).use { result ->
+                    while (result.next()) { checkCanceled(); row(result) }
+                }
+            }
+        }
+        query("SELECT OWNER, TABLE_NAME FROM ALL_TABLES UNION SELECT OWNER, VIEW_NAME AS TABLE_NAME FROM ALL_VIEWS") {
+            val owner = it.getString("OWNER") ?: return@query
+            val name = it.getString("TABLE_NAME") ?: return@query
+            objects.getOrPut(owner to name) { linkedSetOf() }
+        }
+        query("SELECT OWNER, TABLE_NAME, COLUMN_NAME FROM ALL_TAB_COLUMNS ORDER BY OWNER, TABLE_NAME, COLUMN_ID") {
+            val key = it.getString("OWNER") to it.getString("TABLE_NAME")
+            it.getString("COLUMN_NAME")?.let { column -> objects[key]?.add(column) }
+        }
+        checkCanceled()
+        return MetadataSnapshot(objects.map { (key, columns) -> TableMetadata(null, key.first, key.second, columns.toList()) })
     }
 
     fun readConnection(connection: Connection, checkCanceled: () -> Unit = { ProgressManager.checkCanceled() }): MetadataSnapshot {

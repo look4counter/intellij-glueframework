@@ -19,6 +19,133 @@ import kotlin.math.hypot
 import kotlin.math.roundToInt
 
 class ModelDiagramTest : BasePlatformTestCase() {
+    fun testEditDragsWaitForScreenThresholdAndSuppressTheirDoubleClick() {
+        val threshold = java.awt.dnd.DragSource.getDragThreshold()
+        for (zoom in listOf(0.5, 1.0, 1.5)) {
+            for (position in listOf(70 to 55, 20 to 55, 120 to 55, 100 to 55, 170 to 110, 220 to 55)) {
+                val canvas = ModelDiagramCanvas()
+                canvas.display(parse(wireFixture(true)))
+                canvas.setSize(600, 300)
+                canvas.setZoom(zoom)
+                if (position in listOf(100 to 55, 170 to 110, 220 to 55)) canvas.selectWireByIndex(0)
+                else canvas.selectNodesByIds(setOf("a"))
+                val before = canvas.diagram
+                var starts = 0
+                var edits = 0
+                canvas.onMoveStarted = { starts++ }
+                canvas.onActivityEditRequested = { edits++ }
+                canvas.onWireEditRequested = { edits++ }
+                val x = (position.first * zoom + canvas.screenOffset.x).roundToInt()
+                val y = (position.second * zoom + canvas.screenOffset.y).roundToInt()
+                leftDown(canvas, x, y)
+                assertEquals(0, starts)
+                fun motion(dx: Int) = canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_DRAGGED, 1,
+                    MouseEvent.BUTTON1_DOWN_MASK or MouseEvent.ALT_DOWN_MASK, x + dx, y, 0, false, MouseEvent.NOBUTTON))
+                motion(threshold - 1)
+                assertEquals(before, canvas.diagram)
+                assertEquals(0, starts)
+                motion(threshold + 12)
+                assertEquals("position=$position zoom=$zoom", 1, starts)
+                assertTrue(before != canvas.diagram)
+                motion(threshold + 15)
+                assertEquals(1, starts)
+                canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, 2, MouseEvent.ALT_DOWN_MASK,
+                    x + threshold + 15, y, 1, false, MouseEvent.BUTTON1))
+                canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, 3, 0,
+                    x + threshold + 15, y, 2, false, MouseEvent.BUTTON1))
+                assertEquals(0, edits)
+                assertFalse(canvas.isDragging)
+            }
+        }
+    }
+
+    fun testSmallChildGestureKeepsDoubleClickAndPendingDragCanCancel() {
+        val canvas = ModelDiagramCanvas()
+        val original = parse(wireFixture())
+        canvas.display(original)
+        var edits = 0
+        var starts = 0
+        canvas.onActivityEditRequested = { edits++ }
+        canvas.onMoveStarted = { starts++ }
+        drag(canvas, 70, 55, 1, 0, MouseEvent.BUTTON1)
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, 3, 0, 71, 55, 2, false, MouseEvent.BUTTON1))
+        assertEquals(1, edits)
+        assertEquals(0, starts)
+        assertEquals(original, canvas.diagram)
+        leftDown(canvas, 70, 55)
+        canvas.cancelDrag()
+        assertFalse(canvas.isDragging)
+        assertEquals(original, canvas.diagram)
+        drag(canvas, 70, 55, 20, 0, MouseEvent.BUTTON1)
+        assertEquals(1, starts)
+        leftDown(canvas, 90, 55)
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, 4, 0, 90, 55, 1, false, MouseEvent.BUTTON1))
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, 5, 0, 90, 55, 2, false, MouseEvent.BUTTON1))
+        assertEquals(2, edits)
+    }
+
+    private fun withoutWriteIntent(action: () -> Unit) {
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication() as
+            com.intellij.openapi.application.impl.ApplicationImpl
+        app.threadingSupport.releaseTheAcquiredWriteIntentLockThenExecuteActionAndTakeWriteIntentLockBack {
+            assertTrue(app.isDispatchThread)
+            assertFalse(app.isWriteIntentLockAcquired)
+            action()
+        }
+    }
+
+    fun testUnlockedChildDragAndResizeSupportUndoRedoAndSave() = withModelEditor(wireFixture()) { canvas, source, document, file ->
+        val original = document.text
+        withoutWriteIntent { drag(canvas, 70, 55, 30, 40, MouseEvent.BUTTON1) }
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(DiagramPoint(50.0, 80.0), canvas.diagram.nodes.first().location)
+        withoutWriteIntent { drag(canvas, 150, 95, 20, 0, MouseEvent.BUTTON1) }
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(120.0, canvas.diagram.nodes.first().width)
+        val changed = document.text
+        val undo = com.intellij.openapi.command.undo.UndoManager.getInstance(project)
+        undo.undo(source)
+        undo.undo(source)
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(original, document.text)
+        undo.redo(source)
+        undo.redo(source)
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(changed, document.text)
+        FileDocumentManager.getInstance().saveDocument(document)
+        assertEquals(changed, String(file.contentsToByteArray(), Charsets.UTF_8).replace("\r\n", "\n"))
+    }
+
+    fun testUnlockedWireDragPreservesMetadataAndUndo() = withModelEditor(wireFixture(true)) { canvas, source, document, _ ->
+        val original = document.text
+        val path = canvas.wirePath(canvas.diagram.wires[0])
+        val segment = DiagramPoint((path[1].x + path[2].x) / 2, (path[1].y + path[2].y) / 2)
+        leftDown(canvas, segment.x.roundToInt(), segment.y.roundToInt())
+        withoutWriteIntent { drag(canvas, 170, 110, 0, 20, MouseEvent.BUTTON1) }
+        UIUtil.dispatchAllInvocationEvents()
+        point(DiagramPoint(170.0, 130.0), canvas.wirePath(canvas.selectedWire!!)[1])
+        assertEquals(0.2, canvas.selectedWire!!.bendpoints.single().weight)
+        assertTrue(document.text.contains("custom=\"point\""))
+        val changed = document.text
+        val undo = com.intellij.openapi.command.undo.UndoManager.getInstance(project)
+        undo.undo(source)
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(original, document.text)
+        undo.redo(source)
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(changed, document.text)
+    }
+
+    fun testDeferredChildDragKeepsOriginalStampWhenNextDragStarts() = withModelEditor(wireFixture()) { canvas, _, document, _ ->
+        withoutWriteIntent { drag(canvas, 70, 55, 30, 40, MouseEvent.BUTTON1) }
+        val latest = wireFixture().replace("location=\"20,40\"", "location=\"400,500\"")
+        WriteCommandAction.runWriteCommandAction(project) { document.setText(latest) }
+        canvas.onMoveStarted?.invoke()
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(latest, document.text)
+        assertEquals(DiagramPoint(400.0, 500.0), canvas.diagram.nodes.first().location)
+    }
+
     fun testIntegerCoordinateSerializationPreservesSignedValuesAndSizeSentinel() {
         assertEquals("0", DiagramXmlText.coordinate(0.0))
         assertEquals("0", DiagramXmlText.coordinate(-0.1))

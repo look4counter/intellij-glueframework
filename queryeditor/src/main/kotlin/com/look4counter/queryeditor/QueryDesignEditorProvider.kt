@@ -9,7 +9,10 @@ import com.intellij.openapi.vfs.VirtualFile
 
 class QueryDesignEditorProvider : FileEditorProvider, DumbAware {
     override fun accept(project: Project, file: VirtualFile): Boolean = file.fileType == GlueSqlFileType.INSTANCE
-    override fun createEditor(project: Project, file: VirtualFile): FileEditor = QueryDesignEditor(project, file)
+    override fun createEditor(project: Project, file: VirtualFile): FileEditor =
+        com.intellij.openapi.application.ApplicationManager.getApplication().runWriteIntentReadAction<FileEditor, RuntimeException> {
+            QueryDesignEditor(project, file)
+        }
     override fun getEditorTypeId(): String = "glue-query-design"
     override fun getPolicy(): FileEditorPolicy = FileEditorPolicy.PLACE_BEFORE_DEFAULT_EDITOR
 }

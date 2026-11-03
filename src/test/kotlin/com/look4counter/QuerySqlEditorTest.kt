@@ -24,6 +24,74 @@ import java.nio.file.Path
 import javax.swing.JList
 
 class QuerySqlEditorTest : BasePlatformTestCase() {
+    fun testSqlBracePairsFollowCaretAndIgnoreQuotedAndCommentedBraces() {
+        val sql = "select (a + [b * {c} ] ), '(' -- )\n /* [ ] */ x"
+        val field = openSql(sql)
+        val editor = field.editor!!
+        fun ranges(): List<Int> = editor.markupModel.allHighlighters
+            .filter { it.textAttributesKey == com.intellij.openapi.editor.colors.CodeInsightColors.MATCHED_BRACE_ATTRIBUTES }
+            .map { it.startOffset }.sorted()
+        for ((open, close) in listOf('(' to ')', '[' to ']', '{' to '}')) {
+            val first = sql.indexOf(open)
+            val last = sql.indexOf(close)
+            editor.caretModel.moveToOffset(first)
+            assertEquals(listOf(first, last), ranges())
+            editor.caretModel.moveToOffset(last + 1)
+            assertEquals(listOf(first, last), ranges())
+        }
+        editor.caretModel.moveToOffset(sql.indexOf("'('") + 1)
+        assertEmpty(ranges())
+        editor.caretModel.moveToOffset(sql.indexOf("-- )") + 3)
+        assertEmpty(ranges())
+        editor.caretModel.moveToOffset(sql.indexOf("/* [") + 3)
+        assertEmpty(ranges())
+        editor.caretModel.moveToOffset(0)
+        assertEmpty(ranges())
+        WriteCommandAction.runWriteCommandAction(project) { field.document.setText("select (a)") }
+        editor.caretModel.moveToOffset(7)
+        assertEquals(listOf(7, 9), ranges())
+        WriteCommandAction.runWriteCommandAction(project) { field.document.deleteString(9, 10) }
+        assertEmpty(ranges())
+        WriteCommandAction.runWriteCommandAction(project) { field.document.setText("select ([)]") }
+        editor.caretModel.moveToOffset(7)
+        assertEmpty(ranges())
+    }
+
+    fun testSqlBraceHighlightsClearOnQuerySwitchAndDisposal() {
+        val field = openSql("select (1)", secondQuery = true)
+        var editor = field.editor!!
+        fun currentEditor(): com.intellij.openapi.editor.Editor {
+            field.ensureWillComputePreferredSize()
+            field.preferredSize
+            return field.editor!!
+        }
+        fun highlights() = editor.markupModel.allHighlighters.filter {
+            it.textAttributesKey == com.intellij.openapi.editor.colors.CodeInsightColors.MATCHED_BRACE_ATTRIBUTES
+        }
+        editor.caretModel.moveToOffset(7)
+        assertEquals(2, highlights().size)
+        val initial = highlights()
+        val list = descendants(design!!.component).filterIsInstance<JList<*>>().single()
+        list.selectedIndex = 0
+        UIUtil.dispatchAllInvocationEvents()
+        assertTrue(editor.isDisposed)
+        assertTrue(initial.none { it.isValid })
+        editor = currentEditor()
+        assertEmpty(highlights())
+        list.selectedIndex = 1
+        UIUtil.dispatchAllInvocationEvents()
+        assertTrue(editor.isDisposed)
+        editor = currentEditor()
+        editor.caretModel.moveToOffset(7)
+        val previous = highlights()
+        assertEquals(2, previous.size)
+        Disposer.dispose(design!!)
+        design = null
+        UIUtil.dispatchAllInvocationEvents()
+        assertTrue(editor.isDisposed)
+        assertTrue(previous.none { it.isValid })
+    }
+
     private var design: FileEditor? = null
 
     override fun tearDown() {

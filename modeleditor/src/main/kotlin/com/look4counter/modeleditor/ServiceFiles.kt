@@ -54,6 +54,8 @@ object ServiceFiles {
         }
     }
     fun open(project: Project, name: String): Boolean {
+        if (project.isDisposed || name.isBlank()) return false
+        if (deferOpen { open(project, name) }) return true
         val files = find(project, name)
         if (files.isEmpty()) return false
         if (files.size == 1) openDesign(project, files.single())
@@ -68,8 +70,20 @@ object ServiceFiles {
         return true
     }
     private fun openDesign(project: Project, file: VirtualFile) {
+        if (project.isDisposed || !file.isValid) return
+        if (deferOpen { openDesign(project, file) }) return
         val manager = FileEditorManager.getInstance(project)
         manager.openFile(file, true)
         manager.setSelectedEditor(file, "glue-model-design")
+    }
+
+    private fun deferOpen(action: () -> Unit): Boolean {
+        val application = com.intellij.openapi.application.ApplicationManager.getApplication()
+        val guard = com.intellij.openapi.application.TransactionGuard.getInstance()
+        if (application.isDispatchThread && application.isWriteIntentLockAcquired && guard.isWritingAllowed) return false
+        val requested = com.intellij.openapi.application.ModalityState.defaultModalityState()
+        application.invokeLater(action, if (guard.isWriteSafeModality(requested)) requested
+            else com.intellij.openapi.application.ModalityState.nonModal())
+        return true
     }
 }

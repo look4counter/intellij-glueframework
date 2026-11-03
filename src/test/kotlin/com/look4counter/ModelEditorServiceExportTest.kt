@@ -28,6 +28,78 @@ class ModelEditorServiceExportTest : BasePlatformTestCase() {
     private fun parse(text: String): Element = com.intellij.openapi.util.JDOMUtil.load(StringReader(text))
     private fun children(element: Element, name: String) = element.getChildren(name, element.namespace)
 
+    private fun wireModel(initialOutput: String = "//@wire.0", aInput: String = "//@wire.0",
+                          aOutput: String = "//@wire.1", bInput: String = "//@wire.1",
+                          bOutput: String = "//@wire.2", finalInput: String = "//@wire.2",
+                          initialInput: String = "", finalOutput: String = "", extraWire: Boolean = false) = """
+        <GlueDiagram xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
+          <child xsi:type="InitialState" id="0" output="$initialOutput" input="$initialInput"/>
+          <child xsi:type="Activity" id="1" name="A" input="$aInput" output="$aOutput"><property key="class" value="sample.A"/><property key="dao" value="keep"/></child>
+          <child xsi:type="Activity" id="2" name="B" input="$bInput" output="$bOutput"><property key="class" value="sample.B"/></child>
+          <child xsi:type="FinalState" id="3" input="$finalInput" output="$finalOutput"/>
+          <wire id="0"/><wire id="1" guardcondition="next"/><wire id="2"/>
+          ${if (extraWire) "<wire id=\"3\"/>" else ""}
+          <property key="tx" value="true"/>
+        </GlueDiagram>
+    """.trimIndent()
+
+    fun testInvalidWiresAreSkippedWithoutDroppingValidContents() {
+        val cases = listOf(
+            wireModel(bInput = ""), wireModel(aOutput = ""),
+            wireModel(aOutput = "//@wire.1 //@wire.1"), wireModel(bInput = "//@wire.1 //@wire.1"),
+            wireModel(bOutput = "//@wire.2 //@wire.1"), wireModel(aInput = "//@wire.0 //@wire.1"),
+            wireModel(aOutput = "", finalOutput = "//@wire.1"),
+            wireModel(bInput = "", initialInput = "//@wire.1"),
+        )
+        cases.forEach { text ->
+            val service = parse(convert(text))
+            assertEquals("A", service.getAttributeValue("initial"))
+            val activities = children(service, "activity")
+            assertEquals(listOf("A", "B"), activities.map { it.getAttributeValue("name") })
+            assertTrue(children(activities[0], "transition").isEmpty())
+            assertEquals("end", children(activities[1], "transition").single().getAttributeValue("value"))
+            assertEquals("keep", children(activities[0], "property").single().getAttributeValue("value"))
+            assertEquals("true", children(service, "transaction-manager").single().getAttributeValue("commit"))
+            assertEquals(convert(text), convert(text))
+        }
+    }
+
+    fun testBadReferencesAndStateToStateWireDoNotRemoveValidTransitions() {
+        val normal = convert(wireModel())
+        assertEquals(normal, convert(wireModel(aOutput = "bad //@wire.999 //@wire.-1 //@wire.99999999999999 //@wire.1")))
+        assertEquals(normal, convert(wireModel(initialOutput = "//@wire.0 //@wire.3", finalInput = "//@wire.2 //@wire.3", extraWire = true)))
+    }
+
+    fun testMissingOrAmbiguousInitialWireExportsEmptyInitial() {
+        val cases = listOf(wireModel(aInput = ""),
+            wireModel(initialOutput = "//@wire.0 //@wire.3", bInput = "//@wire.1 //@wire.3", extraWire = true),
+            wireModel(initialOutput = "", aInput = "", aOutput = "", bInput = "", bOutput = "", finalInput = ""))
+        cases.forEach { text ->
+            val service = parse(convert(text))
+            assertEquals("", service.getAttributeValue("initial"))
+            assertEquals(2, children(service, "activity").size)
+        }
+    }
+
+    fun testSaveSkipsInvalidWireAndUpdatesOpenOutputWithoutChangingSource() {
+        val text = wireModel(bInput = "")
+        val source = myFixture.addFileToProject("flow.glue_uml_ad", text).virtualFile
+        val target = myFixture.addFileToProject("services/flow-service.xml", "keep").virtualFile
+        ModelEditorSettings.getInstance(project).loadState(ModelEditorState(serviceDirectory = "services"))
+        val manager = FileDocumentManager.getInstance()
+        val sourceDocument = manager.getDocument(source)!!
+        val outputDocument = manager.getDocument(target)!!
+        WriteCommandAction.runWriteCommandAction(project) { sourceDocument.insertString(sourceDocument.textLength, "\n") }
+        val original = sourceDocument.text
+        manager.saveDocument(sourceDocument)
+        val service = parse(outputDocument.text)
+        assertTrue(children(children(service, "activity")[0], "transition").isEmpty())
+        assertEquals(outputDocument.text, VfsUtil.loadText(target).replace("\r\n", "\n"))
+        assertEquals(original, sourceDocument.text)
+        assertEquals(original, VfsUtil.loadText(source).replace("\r\n", "\n"))
+        assertFalse(manager.isDocumentUnsaved(outputDocument))
+    }
+
     fun testUserExampleExportPreservesExactActivityTransitionAndPropertyOrder() {
         val propertySources = listOf(
             "class=com.Test|description=설명|sql-key=sample.emp.select.named|service-name=sample2-service",
@@ -125,7 +197,7 @@ class ModelEditorServiceExportTest : BasePlatformTestCase() {
         val source = myFixture.addFileToProject("sample11.glue_uml_ad", sample()).virtualFile
         val target = myFixture.addFileToProject("services/sample11-service.xml", "keep").virtualFile
         ModelEditorSettings.getInstance(project).loadState(ModelEditorState(serviceDirectory = "services"))
-        for (invalid in listOf(sample().replace("//@wire.0", "//@wire.999"), sample().replace("name=\"삭제[Delete]\"", "name=\"등록[Insert]\""),
+        for (invalid in listOf(sample().replace("name=\"삭제[Delete]\"", "name=\"등록[Insert]\""),
             sample().replace("key=\"class\"", "key=\"missing-class\""), sample().replace("key=\"test-tx\" value=\"true\"", "key=\"test-tx\" value=\"bad\""), "<GlueDiagram><child")) {
             try { ModelServiceSaveListener().save(project, source, invalid); fail("잘못된 모델을 거부해야 합니다.") }
             catch (_: IllegalArgumentException) { }

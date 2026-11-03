@@ -33,7 +33,8 @@ internal data class DataSourceDraft(
     override fun toString(): String = definition.name.ifBlank { "(이름 없음)" }
 }
 
-internal class DataSourceSettingsPanel : JBPanel<DataSourceSettingsPanel>(BorderLayout(0, JBUI.scale(8))) {
+internal class DataSourceSettingsPanel(private val onTestConnection: (DataSourceDraft) -> Unit = {}) :
+    JBPanel<DataSourceSettingsPanel>(BorderLayout(0, JBUI.scale(8))) {
     private val rows = DefaultListModel<DataSourceDraft>()
     private val list = JBList(rows).apply {
         name = "datasource.list"
@@ -51,6 +52,10 @@ internal class DataSourceSettingsPanel : JBPanel<DataSourceSettingsPanel>(Border
     private val password = JPasswordField().apply { name = "datasource.password" }
     private val clearPassword = JBCheckBox("저장된 비밀번호 삭제").apply { name = "datasource.clearPassword" }
     private val remove = JButton("삭제").apply { name = "datasource.remove" }
+    private val testConnection = JButton("연결 테스트").apply {
+        name = "datasource.testConnection"
+        toolTipText = "현재 입력한 정보로 DB 연결을 확인합니다. 설정을 저장하거나 메타데이터를 조회하지 않습니다."
+    }
     private var current = -1
     private var updating = false
 
@@ -88,6 +93,7 @@ internal class DataSourceSettingsPanel : JBPanel<DataSourceSettingsPanel>(Border
             .addLabeledComponent("비밀번호", password)
             .addComponent(clearPassword)
             .addComponent(JBLabel("비밀번호를 비워 두면 저장된 값을 유지합니다."))
+            .addComponent(testConnection)
             .addComponentFillVertically(JBPanel<JBPanel<*>>(), 0).panel
         val right = JBPanel<JBPanel<*>>(BorderLayout()).apply {
             border = JBUI.Borders.emptyLeft(12)
@@ -130,6 +136,13 @@ internal class DataSourceSettingsPanel : JBPanel<DataSourceSettingsPanel>(Border
         }
         listOf(sourceName, url, driver, jars, username, password).forEach { it.document.addDocumentListener(listener) }
         clearPassword.addActionListener { storeCurrent() }
+        testConnection.addActionListener {
+            storeCurrent()
+            if (current in 0 until rows.size()) {
+                val draft = rows.get(current)
+                onTestConnection(draft.copy(definition = draft.definition.detached()))
+            }
+        }
         showCurrent()
     }
 
@@ -198,7 +211,7 @@ internal class DataSourceSettingsPanel : JBPanel<DataSourceSettingsPanel>(Border
         username.text = row?.definition?.username.orEmpty()
         password.text = row?.password.orEmpty()
         clearPassword.isSelected = row?.clearPassword == true
-        listOf(sourceName, kind, url, driver, jars, browse, download, username, password, clearPassword).forEach { it.isEnabled = row != null }
+        listOf(sourceName, kind, url, driver, jars, browse, download, username, password, clearPassword, testConnection).forEach { it.isEnabled = row != null }
         remove.isEnabled = row != null
         updating = false
     }

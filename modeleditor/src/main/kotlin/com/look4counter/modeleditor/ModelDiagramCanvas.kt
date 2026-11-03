@@ -15,6 +15,9 @@ import com.intellij.openapi.project.DumbAwareAction
 import java.awt.BasicStroke
 import java.awt.AlphaComposite
 import java.awt.Color
+import java.awt.Font
+import java.awt.Rectangle
+import java.awt.image.BufferedImage
 import java.awt.Dimension
 import java.awt.Graphics
 import java.awt.Graphics2D
@@ -62,7 +65,18 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     override fun getScrollableTracksViewportHeight() = navigationOnly
     var diagram = ModelDiagram(emptyList(), emptyList())
         private set
-    private var paths = emptyList<Pair<DiagramWire, List<DiagramPoint>>>()
+    private var paths = mutableListOf<Pair<DiagramWire, List<DiagramPoint>>>()
+    private data class WireRenderData(val wire: DiagramWire, val points: List<DiagramPoint>,
+                                      val bounds: Rectangle2D.Double, val label: Rectangle2D.Double?, val font: Font)
+    private val wireRenderData = mutableMapOf<Int, WireRenderData>()
+    private data class CachedPath(val wire: DiagramWire, val start: DiagramPoint?, val end: DiagramPoint?,
+                                  val points: List<DiagramPoint>)
+    private val pathCache = mutableMapOf<Int, CachedPath>()
+    private val pathSlots = mutableMapOf<Int, Int>()
+    private val wirePositions = mutableMapOf<Int, Int>()
+    private val nodePositions = mutableMapOf<Pair<String, DiagramNodeKind>, Int>()
+    private val sceneBounds = DiagramBoundsIndex()
+    private var geometryFont: Font? = null
     private var origin = DiagramPoint(0.0, 0.0)
     private var originInitialized = false
     private val endpointPreview = mutableMapOf<Pair<Int, Boolean>, DiagramPoint>()
@@ -98,9 +112,11 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     var onCreationModeChanged: ((DiagramNodeKind?) -> Unit)? = null
     var onWireCreationModeChanged: ((Boolean) -> Unit)? = null
     var activityColor: (DiagramNode) -> Color? = { null }
+        set(value) { field = value; invalidateAppearance() }
     var activityForeground: (DiagramNode) -> Color? = { null }
+        set(value) { field = value; invalidateAppearance() }
     var changeHighlights: DiagramChangeHighlights = DiagramChangeHighlights()
-        set(value) { field = value; repaint() }
+        set(value) { field = value; invalidateAppearance() }
     var creationPreset: ActivityPreset? = null
         private set
     var wireCreationMode = false
@@ -142,7 +158,12 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     private var resizeLeft: Boolean? = null
     private var dragBase: ModelDiagram? = null
     private var dragAnchor: Point? = null
+    private var editPressPoint: Point? = null
+    private var editDragStarted = false
+    private var suppressEditClick = false
     private var draggedNodes = emptyList<DiagramNode>()
+    private var dragNodePositions = emptyList<Int>()
+    private var dragWirePositions = emptySet<Int>()
     var alignmentGuides = emptyList<AlignmentGuide>()
         private set
     private var alignmentTargets = emptyList<DiagramNode>()
@@ -163,11 +184,50 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     private var observedViewport: JViewport? = null
     private var miniMapDrag: MiniMapProjection? = null
     private val viewportListener = ChangeListener { repaint() }
+    private var sceneRevision = 0L
+    private var appearanceRevision = 0L
+    private data class ProjectionKey(val scene: Long, val visible: Rectangle, val translation: DiagramPoint,
+                                     val zoom: Double, val font: Font)
+    private var projectionKey: ProjectionKey? = null
+    private var cachedProjection: MiniMapProjection? = null
+    private var miniMapBoundsKey: Pair<Long, Font>? = null
+    private var miniMapBounds: Rectangle2D.Double? = null
+    private data class MiniMapImageKey(val scale: Double, val x: Double, val y: Double, val width: Int, val height: Int,
+                                       val deviceX: Double, val deviceY: Double, val appearance: Long,
+                                       val font: Font, val background: Int, val foreground: Int)
+    private var miniMapImageKey: MiniMapImageKey? = null
+    private var miniMapImage: BufferedImage? = null
+    private var miniMapDirty: Rectangle2D.Double? = null
+    private val diagramFont: Font get() = font ?: javax.swing.UIManager.getFont("Label.font")
     val diagramPropertyLines: List<String> get() = diagram.properties.filter { it.key != "description" }
         .flatMap { "${it.key}=${it.value}".lineSequence().toList() }
-    val miniMapProjection: MiniMapProjection? get() = DiagramMiniMap.layout(diagram.nodes, paths.map { it.second },
-        paths.mapNotNull { (wire, path) -> if (!wire.showsCondition) null else labelBounds(path, wire.condition) },
-        visibleRect, origin + pan, zoom)
+    val miniMapProjection: MiniMapProjection? get() {
+        ensureGeometryFont()
+        val key = ProjectionKey(sceneRevision, visibleRect, origin + pan, zoom, diagramFont)
+        if (projectionKey != key) {
+            val boundsKey = sceneRevision to diagramFont
+            if (miniMapBoundsKey != boundsKey) {
+                miniMapBounds = sceneBounds.bounds()
+                miniMapBoundsKey = boundsKey
+            }
+            cachedProjection = DiagramMiniMap.layout(miniMapBounds, key.visible, key.translation, zoom)
+            projectionKey = key
+        }
+        return cachedProjection
+    }
+
+    fun invalidateAppearance() {
+        appearanceRevision++
+        clearMiniMapImage()
+        repaint()
+    }
+
+    private fun clearMiniMapImage() {
+        miniMapImage?.flush()
+        miniMapImage = null
+        miniMapImageKey = null
+        miniMapDirty = null
+    }
 
     init {
         name = "model.diagram"
@@ -190,6 +250,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         }.registerCustomShortcutSet(CommonShortcuts.DELETE, this)
         val navigation = object : MouseAdapter() {
             override fun mousePressed(event: MouseEvent) {
+                suppressEditClick = false
                 traceCreationMouse(event)
                 if (SwingUtilities.isLeftMouseButton(event) && miniMapProjection?.frame?.contains(event.point) == true) {
                     val projection = miniMapProjection!!
@@ -236,6 +297,10 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                 gesturePan = pan
                 dragBase = null
                 dragAnchor = null
+                dragNodePositions = emptyList()
+                dragWirePositions = emptySet()
+                editPressPoint = event.point
+                editDragStarted = false
                 resizeLeft = null
                 alignmentGuides = emptyList()
                 lastChildDrag = null
@@ -263,7 +328,6 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                             wireDrag = wire.index to (wireHandle.pointIndex == 0)
                         else bendDrag = wireHandle
                         originalWire = wire
-                        onMoveStarted?.invoke()
                         cursor = Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR)
                     } else if (handle != null) {
                         selection.remove(handle.first)
@@ -273,7 +337,6 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                         dragAnchor = event.point
                         draggedNodes = selectedNodes.filter { it.isActivity }
                         cursor = Cursor.getPredefinedCursor(if (handle.second) Cursor.W_RESIZE_CURSOR else Cursor.E_RESIZE_CURSOR)
-                        onMoveStarted?.invoke()
                     } else if (node != null) {
                         selectedWire = null
                         if (!event.isShiftDown && node !in selection) selection.clear()
@@ -283,7 +346,6 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                             dragBase = diagram
                             dragAnchor = event.point
                             draggedNodes = selectedNodes
-                            onMoveStarted?.invoke()
                         }
                     } else {
                         val wire = wireAt(event.point)
@@ -308,6 +370,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
 
             override fun mouseClicked(event: MouseEvent) {
                 traceCreationMouse(event)
+                if (suppressEditClick) { event.consume(); return }
                 lastCreationInputId = ChildCreationTrace.inputId(event)
                 if (!SwingUtilities.isLeftMouseButton(event) || !canMoveNodes() || diagram.message != null) {
                     onCreationTrace?.invoke("IGNORE input=$lastCreationInputId reason=" +
@@ -399,6 +462,20 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                 val start = boxStart
                 val base = dragBase
                 val anchor = dragAnchor
+                if (wireDrag != null || bendDrag != null || base != null) {
+                    if (!canMoveNodes()) { cancelDrag(); event.consume(); return }
+                    if (!editDragStarted) {
+                        val press = editPressPoint ?: return
+                        if (press.distance(event.point) < java.awt.dnd.DragSource.getDragThreshold()) {
+                            event.consume()
+                            return
+                        }
+                        editDragStarted = true
+                        suppressEditClick = true
+                        prepareChildDrag()
+                        onMoveStarted?.invoke()
+                    }
+                }
                 if (last != null) {
                     pan += DiagramPoint((event.x - last.x).toDouble(), (event.y - last.y).toDouble())
                     previous = event.point
@@ -477,6 +554,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     wireDrag = null
                     bendDrag = null
                     originalWire = null
+                    editPressPoint = null
+                    editDragStarted = false
                     if (commit) {
                         if (onWireEdited != null) onWireEdited?.invoke(original, edited, removedBendpoint)
                         else display(DiagramEdits.applyWire(diagram, edited))
@@ -503,6 +582,10 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                 }.filter { (node, location) -> node.location != location }
                 dragBase = null
                 dragAnchor = null
+                dragNodePositions = emptyList()
+                dragWirePositions = emptySet()
+                editPressPoint = null
+                editDragStarted = false
                 resizeLeft = null
                 alignmentGuides = emptyList()
                 alignmentTargets = emptyList()
@@ -628,14 +711,24 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             else DiagramAlignment.resize(draggedNodes, alignmentTargets, widthDelta, left)
         }
         alignmentGuides = result.guides
-        val moved = base.nodes.associateWith { node ->
-            if (node !in draggedNodes) node
-            else if (left != null) node.copy(width = node.width + result.delta.x,
+        val moved = dragNodePositions.associate { index ->
+            val node = base.nodes[index]
+            node to if (left != null) node.copy(width = node.width + result.delta.x,
                 location = if (left) node.location + DiagramPoint(-result.delta.x, 0.0) else node.location)
             else node.copy(location = node.location + result.delta)
         }
-        replaceDiagram(base.copy(nodes = base.nodes.map { moved.getValue(it) },
-            wires = base.wires.map { DiagramEdits.relocateNodes(it, moved) }))
+        val nodes = base.nodes.toMutableList()
+        dragNodePositions.forEach { nodes[it] = moved.getValue(base.nodes[it]) }
+        val wires = base.wires.toMutableList()
+        dragWirePositions.forEach { wires[it] = DiagramEdits.relocateNodes(base.wires[it], moved) }
+        replaceDiagram(base.copy(nodes = nodes, wires = wires), dragNodePositions.toSet(), dragWirePositions)
+    }
+
+    private fun prepareChildDrag() {
+        val base = dragBase ?: return
+        val selected = draggedNodes.toHashSet()
+        dragNodePositions = base.nodes.indices.filter { base.nodes[it] in selected }
+        dragWirePositions = base.wires.indices.filter { base.wires[it].start in selected || base.wires[it].end in selected }.toSet()
     }
 
     override fun updateUI() {
@@ -650,6 +743,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     }
 
     override fun removeNotify() {
+        clearMiniMapImage()
+        projectionKey = null
         observedViewport?.removeChangeListener(viewportListener)
         observedViewport = null
         super.removeNotify()
@@ -771,8 +866,12 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         wireDragged = false
         dragBase = null
         dragAnchor = null
+        editPressPoint = null
+        editDragStarted = false
         resizeLeft = null
         draggedNodes = emptyList()
+        dragNodePositions = emptyList()
+        dragWirePositions = emptySet()
         previous = null
         boxStart = null
         retained = emptyList()
@@ -841,8 +940,12 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         return target.takeUnless { opposite != null && it.id == opposite.id && it.kind == opposite.kind }
     }
 
-    private fun replaceWire(wire: DiagramWire) = replaceDiagram(diagram.copy(
-        wires = diagram.wires.map { if (it.index == wire.index) wire else it }))
+    private fun replaceWire(wire: DiagramWire) {
+        val position = wirePositions[wire.index] ?: return
+        val wires = diagram.wires.toMutableList()
+        wires[position] = wire
+        replaceDiagram(diagram.copy(wires = wires), emptySet(), setOf(position))
+    }
 
     private fun previewEndpoint(point: Point) {
         val original = originalWire ?: return
@@ -878,13 +981,74 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     }
 
     fun wirePath(wire: DiagramWire): List<DiagramPoint> {
-        endpointPreview[wire.index to true]?.let { return DiagramGeometry.previewStateEndpoint(wire, true, it) }
-        endpointPreview[wire.index to false]?.let { return DiagramGeometry.previewStateEndpoint(wire, false, it) }
-        return DiagramGeometry.path(wire)
+        val start = endpointPreview[wire.index to true]
+        val end = endpointPreview[wire.index to false]
+        pathCache[wire.index]?.takeIf { it.wire === wire && it.start == start && it.end == end }?.let { return it.points }
+        val points = when {
+            start != null -> DiagramGeometry.previewStateEndpoint(wire, true, start)
+            end != null -> DiagramGeometry.previewStateEndpoint(wire, false, end)
+            else -> DiagramGeometry.path(wire)
+        }
+        pathCache[wire.index] = CachedPath(wire, start, end, points)
+        return points
     }
 
     private fun rebuildPaths() {
-        paths = diagram.wires.map { it to wirePath(it) }.filter { it.second.size >= 2 }
+        paths.clear()
+        pathSlots.clear()
+        wirePositions.clear()
+        wireRenderData.clear()
+        sceneBounds.clear()
+        diagram.nodes.forEachIndexed { index, node -> sceneBounds.set(index.toLong(), modelNodeBounds(node)) }
+        diagram.wires.forEachIndexed { position, wire ->
+            wirePositions[wire.index] = position
+            val points = wirePath(wire)
+            if (points.size >= 2) {
+                pathSlots[wire.index] = paths.size
+                paths.add(wire to points)
+                updateWireRenderData(position, wire, points)
+            }
+        }
+        geometryFont = diagramFont
+        clearMiniMapImage()
+        sceneRevision++
+    }
+
+    private fun updateWireRenderData(position: Int, wire: DiagramWire, points: List<DiagramPoint>) {
+        val bounds = pathBounds(points)
+        val label = if (wire.showsCondition) labelBounds(points, wire.condition) else null
+        wireRenderData[wire.index] = WireRenderData(wire, points, bounds, label, diagramFont)
+        val combined = Rectangle2D.Double(bounds.x, bounds.y, bounds.width, bounds.height)
+        label?.let { combined.add(it) }
+        sceneBounds.set(-position.toLong() - 1, combined)
+    }
+
+    private fun ensureGeometryFont() {
+        if (geometryFont != diagramFont) rebuildPaths()
+    }
+
+    private fun modelNodeBounds(node: DiagramNode) = Rectangle2D.Double(node.location.x, node.location.y, node.width, node.height)
+
+    private fun dirtyMiniMap(bounds: Rectangle2D) {
+        if (miniMapImage == null) return
+        val padding = maxOf(12.0, 2.0 / (cachedProjection?.scale ?: 1.0))
+        val expanded = Rectangle2D.Double(bounds.x - padding, bounds.y - padding,
+            bounds.width + padding * 2, bounds.height + padding * 2)
+        if (miniMapDirty == null) miniMapDirty = expanded else miniMapDirty!!.add(expanded)
+    }
+
+    private fun dirtyWire(index: Int) {
+        wireRenderData[index]?.let { dirtyMiniMap(it.bounds); it.label?.let(::dirtyMiniMap) }
+    }
+
+    private fun pathBounds(points: List<DiagramPoint>): Rectangle2D.Double {
+        val left = points.minOf { it.x }; val top = points.minOf { it.y }
+        return Rectangle2D.Double(left, top, points.maxOf { it.x } - left, points.maxOf { it.y } - top)
+    }
+
+    private fun intersectsClip(g: Graphics2D, bounds: Rectangle2D, padding: Double = 0.0): Boolean {
+        val clip = g.clipBounds ?: return true
+        return clip.intersects(bounds.x - padding, bounds.y - padding, bounds.width + padding * 2, bounds.height + padding * 2)
     }
 
     private fun wireAt(point: Point): DiagramWire? {
@@ -909,13 +1073,43 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         updateBounds()
     }
 
-    private fun replaceDiagram(value: ModelDiagram) {
-        val retained = selection.mapNotNull { old -> value.nodes.firstOrNull { it.id == old.id && it.kind == old.kind } }
+    private fun replaceDiagram(value: ModelDiagram, changedNodes: Set<Int>? = null, changedWires: Set<Int>? = null) {
+        if (changedNodes == null || changedWires == null) {
+            nodePositions.clear()
+            value.nodes.forEachIndexed { index, node -> nodePositions.putIfAbsent(node.id to node.kind, index) }
+        }
+        val retained = selection.mapNotNull { old -> nodePositions[old.id to old.kind]?.let { value.nodes[it] } }
         selection.clear()
         selection.addAll(retained)
-        selectedWire = selectedWire?.let { old -> value.wires.firstOrNull { it.index == old.index } }
+        selectedWire = selectedWire?.let { old ->
+            if (changedWires == null) value.wires.firstOrNull { it.index == old.index }
+            else wirePositions[old.index]?.let { value.wires[it] }
+        }
+        changedNodes?.forEach { dirtyMiniMap(modelNodeBounds(diagram.nodes[it])) }
+        changedWires?.forEach { dirtyWire(diagram.wires[it].index) }
         diagram = value
-        rebuildPaths()
+        if (changedNodes == null || changedWires == null) {
+            pathCache.clear()
+            rebuildPaths()
+        } else {
+            changedNodes.forEach { index ->
+                val bounds = modelNodeBounds(value.nodes[index])
+                sceneBounds.set(index.toLong(), bounds)
+                dirtyMiniMap(bounds)
+            }
+            for (position in changedWires) {
+                val wire = value.wires[position]
+                val points = wirePath(wire)
+                val slot = pathSlots[wire.index]
+                if ((slot != null) != (points.size >= 2)) { rebuildPaths(); repaint(); return }
+                if (slot != null) {
+                    paths[slot] = wire to points
+                    updateWireRenderData(position, wire, points)
+                    dirtyWire(wire.index)
+                }
+            }
+            sceneRevision++
+        }
         repaint()
     }
 
@@ -939,6 +1133,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
 
     override fun paintComponent(graphics: Graphics) {
         super.paintComponent(graphics)
+        ensureGeometryFont()
         val g = graphics.create() as Graphics2D
         try {
             g.color = background
@@ -1066,24 +1261,46 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             g.color = wireColor
             g.stroke = BasicStroke(1f)
             g.drawRoundRect(frame.x, frame.y, frame.width, frame.height, 8, 8)
+            val deviceX = kotlin.math.hypot(graphics.transform.scaleX, graphics.transform.shearY).coerceAtLeast(1.0)
+            val deviceY = kotlin.math.hypot(graphics.transform.scaleY, graphics.transform.shearX).coerceAtLeast(1.0)
+            val imageKey = MiniMapImageKey(projection.scale, projection.offsetX - frame.x, projection.offsetY - frame.y,
+                frame.width, frame.height, deviceX, deviceY, appearanceRevision,
+                diagramFont, background.rgb, foreground.rgb)
+            val recreate = miniMapImageKey != imageKey || miniMapImage == null
+            if (recreate) {
+                miniMapImage?.flush()
+                miniMapImage = BufferedImage(ceil(frame.width * deviceX).toInt(), ceil(frame.height * deviceY).toInt(),
+                    BufferedImage.TYPE_INT_ARGB)
+            }
+            if (recreate || miniMapDirty != null) {
+                val imageGraphics = miniMapImage!!.createGraphics()
+                try {
+                    imageGraphics.scale(deviceX, deviceY)
+                    imageGraphics.translate(-frame.x, -frame.y)
+                    if (!recreate) {
+                        val dirty = projection.map(miniMapDirty!!).bounds.apply { grow(1, 1) }
+                        imageGraphics.clip(dirty)
+                        imageGraphics.composite = AlphaComposite.Clear
+                        imageGraphics.fillRect(frame.x, frame.y, frame.width, frame.height)
+                    }
+                    imageGraphics.font = diagramFont
+                    imageGraphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                    imageGraphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
+                    imageGraphics.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.78f)
+                    imageGraphics.clip(projection.contentArea)
+                    imageGraphics.translate(projection.offsetX, projection.offsetY)
+                    imageGraphics.scale(projection.scale, projection.scale)
+                    imageGraphics.stroke = BasicStroke((1.0 / projection.scale).toFloat())
+                    drawMiniMapModel(imageGraphics)
+                } finally { imageGraphics.dispose() }
+                miniMapDirty = null
+                miniMapImageKey = imageKey
+            }
             val originalClip = g.clip
             g.clip(projection.contentArea)
-            val modelGraphics = g.create() as Graphics2D
-            try {
-                modelGraphics.translate(projection.offsetX, projection.offsetY)
-                modelGraphics.scale(projection.scale, projection.scale)
-                modelGraphics.stroke = BasicStroke((1.0 / projection.scale).toFloat())
-                paths.forEach { (wire, path) -> drawWire(modelGraphics, wire, path, changeColor(changeHighlights.wireChanges[wire.id])) }
-                paths.filter { it.first.showsCondition }.forEach { (wire, path) -> drawLabel(modelGraphics, wire, path, changeColor(changeHighlights.wireChanges[wire.id])) }
-                changeHighlights.removedWires.forEach { wire ->
-                    val path = DiagramGeometry.path(wire)
-                    if (path.size >= 2) drawWire(modelGraphics, wire, path, changeColor(DiagramChangeKind.Removed), true)
-                }
-                diagram.nodes.forEach { drawNode(modelGraphics, it, changeColor(changeHighlights.nodeChanges[it.id])) }
-                changeHighlights.removedNodes.forEach { drawNode(modelGraphics, it, changeColor(DiagramChangeKind.Removed), true) }
-            } finally {
-                modelGraphics.dispose()
-            }
+            g.composite = AlphaComposite.SrcOver
+            g.drawImage(miniMapImage, frame.x, frame.y, frame.width, frame.height, null)
+            g.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.78f)
             g.clip = originalClip
             g.color = JBColor.BLUE
             g.stroke = BasicStroke(1.2f)
@@ -1093,7 +1310,21 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         }
     }
 
+    private fun drawMiniMapModel(g: Graphics2D) {
+        paths.forEach { (wire, path) -> drawWire(g, wire, path, changeColor(changeHighlights.wireChanges[wire.id])) }
+        paths.filter { it.first.showsCondition }.forEach { (wire, path) -> drawLabel(g, wire, path, changeColor(changeHighlights.wireChanges[wire.id])) }
+        changeHighlights.removedWires.forEach { wire ->
+            val path = DiagramGeometry.path(wire)
+            if (path.size >= 2) drawWire(g, wire, path, changeColor(DiagramChangeKind.Removed), true)
+        }
+        diagram.nodes.forEach { drawNode(g, it, changeColor(changeHighlights.nodeChanges[it.id])) }
+        changeHighlights.removedNodes.forEach { drawNode(g, it, changeColor(DiagramChangeKind.Removed), true) }
+    }
+
     private fun drawWire(g: Graphics2D, wire: DiagramWire, points: List<DiagramPoint>, color: Color? = null, ghost: Boolean = false) {
+        val cached = wireRenderData[wire.index]?.takeIf { it.wire === wire && it.points === points }
+        val padding = maxOf(10.0, ((g.stroke as? BasicStroke)?.lineWidth ?: 1f).toDouble())
+        if (!intersectsClip(g, cached?.bounds ?: pathBounds(points), padding)) return
         val oldStroke = g.stroke
         val path = Path2D.Double().apply {
             moveTo(points.first().x, points.first().y)
@@ -1118,7 +1349,9 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     }
 
     private fun drawLabel(g: Graphics2D, wire: DiagramWire, points: List<DiagramPoint>, color: Color? = null) {
-        val bounds = labelBounds(points, wire.condition) ?: return
+        val cached = wireRenderData[wire.index]?.takeIf { it.wire === wire && it.points === points && it.font == g.font }
+        val bounds = cached?.label ?: labelBounds(points, wire.condition) ?: return
+        if (!intersectsClip(g, bounds, 2.0)) return
         g.color = background
         g.fill(bounds)
         g.color = color ?: wireColor
@@ -1127,6 +1360,10 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     }
 
     private fun drawNode(g: Graphics2D, node: DiagramNode, outlineColor: Color? = null, outlineOnly: Boolean = false) {
+        val bounds = Rectangle2D.Double(node.location.x, node.location.y, if (node.isActivity) node.width else 20.0,
+            if (node.isActivity) 30.0 else 20.0)
+        val padding = maxOf(3.0, ((g.stroke as? BasicStroke)?.lineWidth ?: 1f).toDouble())
+        if (!intersectsClip(g, bounds, padding)) return
         val oldStroke = g.stroke
         val x = node.location.x
         val y = node.location.y
@@ -1187,6 +1424,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     }
 
     private fun drawNodeSelection(g: Graphics2D, node: DiagramNode) {
+            if (!intersectsClip(g, Rectangle2D.Double(node.location.x, node.location.y, node.width, node.height), 8.0)) return
             g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_OFF)
             g.stroke = BasicStroke(1f)
             val x = node.location.x

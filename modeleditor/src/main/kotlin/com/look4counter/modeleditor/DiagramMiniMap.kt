@@ -23,13 +23,22 @@ object DiagramMiniMap {
     fun layout(nodes: List<DiagramNode>, paths: List<List<DiagramPoint>>, labels: List<Rectangle2D>,
                visible: Rectangle, translation: DiagramPoint, zoom: Double = 1.0): MiniMapProjection? {
         if (visible.width < 160 || visible.height < 120 || (nodes.isEmpty() && paths.isEmpty())) return null
+        return layout(modelBounds(nodes, paths, labels), visible, translation, zoom)
+    }
+
+    fun modelBounds(nodes: List<DiagramNode>, paths: List<List<DiagramPoint>>, labels: List<Rectangle2D>): Rectangle2D.Double? {
         val points = nodes.flatMap { listOf(it.location, it.location + DiagramPoint(it.width, it.height)) } +
             paths.flatten() + labels.flatMap { listOf(DiagramPoint(it.minX, it.minY), DiagramPoint(it.maxX, it.maxY)) }
         if (points.isEmpty()) return null
         val minX = points.minOf { it.x } - 8
         val minY = points.minOf { it.y } - 8
-        val bounds = Rectangle2D.Double(minX, minY, maxOf(1.0, points.maxOf { it.x } + 8 - minX),
+        return Rectangle2D.Double(minX, minY, maxOf(1.0, points.maxOf { it.x } + 8 - minX),
             maxOf(1.0, points.maxOf { it.y } + 8 - minY))
+    }
+
+    fun layout(bounds: Rectangle2D.Double?, visible: Rectangle, translation: DiagramPoint,
+               zoom: Double = 1.0): MiniMapProjection? {
+        if (bounds == null || visible.width < 160 || visible.height < 120) return null
         val width = minOf(200, maxOf(96, visible.width / 3))
         val height = minOf(140, maxOf(72, visible.height / 3))
         val frame = Rectangle(visible.x + visible.width - width - 12, visible.y + 12, width, height)

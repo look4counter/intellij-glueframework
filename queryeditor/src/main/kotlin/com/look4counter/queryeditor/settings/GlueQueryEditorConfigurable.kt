@@ -23,7 +23,7 @@ open class GlueQueryEditorConfigurable(private val project: Project) : Searchabl
     override fun createComponent(): JComponent = component ?: run {
         val lifetime = Disposer.newDisposable("Datasource settings UI")
         uiDisposable = lifetime
-        val settingsPanel = DataSourceSettingsPanel().also { panel = it }
+        val settingsPanel = DataSourceSettingsPanel(::testDraftConnection).also { panel = it }
         JBPanel<JBPanel<*>>(BorderLayout()).apply {
             add(settingsPanel, BorderLayout.CENTER)
             add(DataSourceMetadataToolbar(project, lifetime), BorderLayout.SOUTH)
@@ -40,6 +40,45 @@ open class GlueQueryEditorConfigurable(private val project: Project) : Searchabl
     }
 
     protected open fun createPasswordManager(): DataSourcePasswordManager = DataSourcePasswordManager(project.locationHash)
+
+    protected open fun testConnection(source: DataSourceDefinition, password: String?) {
+        com.look4counter.queryeditor.database.JdbcMetadataReader().testConnection(source, password)
+    }
+
+    protected open fun showConnectionTestResult(success: Boolean) {
+        if (success) com.intellij.openapi.ui.Messages.showInfoMessage(project, "DB 연결에 성공했습니다.", "연결 테스트")
+        else com.intellij.openapi.ui.Messages.showErrorDialog(project,
+            "DB에 연결하지 못했습니다. DB 종류·JDBC URL·드라이버 JAR·사용자명·비밀번호와 네트워크를 확인하세요.", "연결 테스트")
+    }
+
+    private fun testDraftConnection(draft: DataSourceDraft) {
+        val source = draft.definition.copy(jdbcUrl = draft.definition.jdbcUrl.trim(),
+            username = draft.definition.username.trim(), driverClass = draft.definition.driverClass.trim())
+        if (!source.jdbcUrl.startsWith("jdbc:") || (draft.password != null && draft.clearPassword)) {
+            showConnectionTestResult(false)
+            return
+        }
+        var success = false
+        val completed = ProgressManager.getInstance().runProcessWithProgressSynchronously(Runnable {
+            try {
+                val password = when {
+                    draft.password != null -> draft.password
+                    draft.clearPassword -> null
+                    source.passwordStored -> createPasswordManager().readPassword(source.id)
+                    else -> null
+                }
+                ProgressManager.checkCanceled()
+                testConnection(source, password)
+                ProgressManager.checkCanceled()
+                success = true
+            } catch (canceled: com.intellij.openapi.progress.ProcessCanceledException) {
+                throw canceled
+            } catch (_: Exception) {
+                success = false
+            }
+        }, "DB 연결 테스트", true, project)
+        if (completed && !project.isDisposed && panel != null) showConnectionTestResult(success)
+    }
 
     override fun apply() {
         val drafts = panel?.snapshot() ?: return
