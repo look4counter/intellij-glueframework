@@ -47,10 +47,24 @@ import java.util.Locale
 
 class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable {
     var navigationOnly = false
+    var orthogonalEnabled = false
+        set(value) {
+            if (field == value) return
+            field = value
+            orthogonalSnap.reset()
+            if (bendDrag != null) lastWirePointer?.let { previewBendpoint(it, lastWireBypass) }
+            repaint()
+        }
+    private val orthogonalSnap = OrthogonalWireSnap()
+    private var lastWirePointer: Point? = null
+    private var lastWireBypass = false
     var snapEnabled = false
         set(value) {
             if (field == value) return
             field = value
+            if (creationKind != null) {
+                updateCreationPoint(creationPointer, creationSnapBypassed)
+            }
             if (!value) {
                 alignmentGuides = emptyList()
                 lastChildDrag?.let { previewChildDrag(it, true) }
@@ -130,6 +144,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     var creationRevision = 0L
         private set
     private var creationPoint: DiagramPoint? = null
+    private var creationPointer: Point? = null
+    private var creationSnapBypassed = false
     private var creationPressPoint: Point? = null
     private var creationPressRevision: Long = -1L
     private var creationReleaseHandledAt: Long = Long.MIN_VALUE
@@ -286,7 +302,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     }
                     creationPressPoint = event.point
                     creationPressRevision = creationRevision
-                    creationPoint = modelPoint(event.point)
+                    updateCreationPoint(event.point, event.isAltDown)
                     requestFocusInWindow()
                     repaint()
                     event.consume()
@@ -328,6 +344,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                             wireDrag = wire.index to (wireHandle.pointIndex == 0)
                         else bendDrag = wireHandle
                         originalWire = wire
+                        orthogonalSnap.reset()
+                        lastWirePointer = null
                         cursor = Cursor.getPredefinedCursor(Cursor.MOVE_CURSOR)
                     } else if (handle != null) {
                         selection.remove(handle.first)
@@ -411,7 +429,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                         event.consume()
                         return
                     }
-                    creationPoint = modelPoint(event.point)
+                    updateCreationPoint(event.point, event.isAltDown)
                     if (event.clickCount == 1) {
                         val ghost = ghostNode
                         when {
@@ -455,6 +473,12 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     event.consume()
                     return
                 }
+                if (creationKind != null && creationPressPoint != null &&
+                    SwingUtilities.isLeftMouseButton(event)) {
+                    updateCreationPoint(event.point, event.isAltDown)
+                    event.consume()
+                    return
+                }
                 if (wireCreationMode && previous == null) {
                     updateWireCreation(event.point); repaint(); event.consume(); return
                 }
@@ -480,13 +504,12 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     pan += DiagramPoint((event.x - last.x).toDouble(), (event.y - last.y).toDouble())
                     previous = event.point
                     if (wireCreationMode) updateWireCreation(event.point)
-                    if (creationKind != null) creationPoint =
-                        if (miniMapProjection?.frame?.contains(event.point) == true) null else modelPoint(event.point)
+                    if (creationKind != null) updateCreationPoint(event.point, event.isAltDown)
                 } else if (wireDrag != null) {
                     previewEndpoint(event.point)
                     wireDragged = true
                 } else if (bendDrag != null) {
-                    previewBendpoint(event.point)
+                    previewBendpoint(event.point, event.isAltDown)
                     wireDragged = true
                 } else if (base != null && anchor != null) {
                     lastChildDrag = event.point
@@ -515,9 +538,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     creationPressPoint = null
                     creationPressRevision = -1L
                     if (press != null && sameRevision) {
-                        val distance = press.distance(event.point)
-                        if (distance <= creationClickTolerance) {
-                            creationPoint = modelPoint(event.point)
+                        updateCreationPoint(event.point, event.isAltDown)
+                        if (creationPoint != null) {
                             lastCreationInputId = ChildCreationTrace.inputId(event)
                             val ghost = ghostNode
                             if (ghost != null && onChildCreateRequested != null) {
@@ -526,10 +548,9 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                                 creationReleaseHandledAt = event.`when`
                                 creationReleaseHandledPoint = event.point
                             } else onCreationTrace?.invoke("IGNORE input=$lastCreationInputId reason=no_ghost")
-                        } else onCreationTrace?.invoke("IGNORE input=${ChildCreationTrace.inputId(event)} reason=drag distance=${distance.toInt()}")
+                        } else onCreationTrace?.invoke("IGNORE input=${ChildCreationTrace.inputId(event)} reason=outside_creation_area")
                     }
                     event.consume()
-                    repaint()
                     return
                 }
                 miniMapDrag?.let { projection ->
@@ -544,7 +565,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     val reconnecting = wireDrag != null
                     val valid = if (reconnecting) validEndpointTarget(event.point) != null else true
                     if (wireDragged && valid) {
-                        if (reconnecting) previewEndpoint(event.point) else previewBendpoint(event.point)
+                        if (reconnecting) previewEndpoint(event.point) else previewBendpoint(event.point, event.isAltDown)
                     }
                     val edited = diagram.wires.single { it.index == original.index }
                     val removedBendpoint = if (edited.bendpoints.size == original.bendpoints.size - 1)
@@ -554,6 +575,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     wireDrag = null
                     bendDrag = null
                     originalWire = null
+                    orthogonalSnap.reset()
+                    lastWirePointer = null
                     editPressPoint = null
                     editDragStarted = false
                     if (commit) {
@@ -607,6 +630,11 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             }
 
             override fun mouseMoved(event: MouseEvent) {
+                if (creationKind != null) {
+                    updateCreationPoint(event.point, event.isAltDown)
+                    cursor = Cursor.getPredefinedCursor(if (creationPoint == null) Cursor.DEFAULT_CURSOR else Cursor.CROSSHAIR_CURSOR)
+                    return
+                }
                 if (miniMapProjection?.frame?.contains(event.point) == true) {
                     creationPoint = null
                     wireCreationPoint = null
@@ -619,12 +647,6 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     cursor = Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)
                     repaint(); return
                 }
-                if (creationKind != null) {
-                    creationPoint = modelPoint(event.point)
-                    cursor = Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)
-                    repaint()
-                    return
-                }
                 if (previous != null || boxStart != null || dragBase != null || wireDrag != null || bendDrag != null) return
                 val side = if (canMoveNodes()) resizeHandleAt(event.point) else null
                 val type = when {
@@ -636,6 +658,11 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             }
 
             override fun mouseExited(event: MouseEvent) {
+                if (creationKind != null) {
+                    updateCreationPoint(null)
+                    cursor = Cursor.getDefaultCursor()
+                    return
+                }
                 creationPoint = null
                 wireCreationPoint = null
                 repaint()
@@ -644,9 +671,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
 
             override fun mouseEntered(event: MouseEvent) {
                 if (creationKind != null && miniMapProjection?.frame?.contains(event.point) != true) {
-                    creationPoint = modelPoint(event.point)
+                    updateCreationPoint(event.point, event.isAltDown)
                     cursor = Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)
-                    repaint()
                 }
             }
         }
@@ -657,15 +683,25 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             val amount = event.preciseWheelRotation * 30
             pan += if (event.isControlDown) DiagramPoint(-amount, 0.0) else DiagramPoint(0.0, -amount)
             creationPoint = null
+            creationPointer = null
+            if (creationKind != null) alignmentGuides = emptyList()
             repaint()
             event.consume()
         }
         addKeyListener(object : KeyAdapter() {
             override fun keyPressed(event: KeyEvent) {
-                if (event.keyCode == KeyEvent.VK_ALT) lastChildDrag?.let { previewChildDrag(it, true) }
+                if (event.keyCode == KeyEvent.VK_ALT) {
+                    if (bendDrag != null) lastWirePointer?.let { previewBendpoint(it, true); repaint() }
+                    lastChildDrag?.let { previewChildDrag(it, true) }
+                    if (creationKind != null) updateCreationPoint(creationPointer, true)
+                }
             }
             override fun keyReleased(event: KeyEvent) {
-                if (event.keyCode == KeyEvent.VK_ALT) lastChildDrag?.let { previewChildDrag(it, false) }
+                if (event.keyCode == KeyEvent.VK_ALT) {
+                    if (bendDrag != null) lastWirePointer?.let { previewBendpoint(it, false); repaint() }
+                    lastChildDrag?.let { previewChildDrag(it, false) }
+                    if (creationKind != null) updateCreationPoint(creationPointer, false)
+                }
             }
         })
     }
@@ -674,6 +710,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         val visible = visibleRect
         pan = DiagramPoint(visible.centerX - origin.x - point.x * zoom, visible.centerY - origin.y - point.y * zoom)
         creationPoint = null
+        creationPointer = null
+        if (creationKind != null) alignmentGuides = emptyList()
         repaint()
     }
 
@@ -687,6 +725,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         scaleFactor = next
         pan = DiagramPoint(visible.centerX - origin.x - center.x * zoom, visible.centerY - origin.y - center.y * zoom)
         creationPoint = null
+        creationPointer = null
+        if (creationKind != null) alignmentGuides = emptyList()
         onZoomChanged?.invoke()
         repaint()
     }
@@ -775,6 +815,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             creationRevision++
             creationKind = null
             creationPoint = null
+            creationPointer = null
+            alignmentGuides = emptyList()
             creationPressPoint = null
             creationPressRevision = -1L
             creationReleaseHandledAt = Long.MIN_VALUE
@@ -801,9 +843,12 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         creationRevision++
         if (isDragging) cancelDrag()
         if (kind != null && wireCreationMode) setWireCreationMode(false)
+        suppressEditClick = false
         creationKind = kind
         creationPreset = if (kind == DiagramNodeKind.Activity) preset?.detached() else null
         creationPoint = null
+        creationPointer = null
+        alignmentGuides = emptyList()
         creationPressPoint = null
         creationPressRevision = -1L
         creationReleaseHandledAt = Long.MIN_VALUE
@@ -854,6 +899,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     }
 
     private fun clearGesture() {
+        orthogonalSnap.reset()
+        lastWirePointer = null
         wireCreationStart = null; wireCreationStartPoint = null; wireCreationPoint = null; wireCreationTarget = null
         miniMapDrag = null
         alignmentGuides = emptyList()
@@ -970,12 +1017,17 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         replaceWire(wire)
     }
 
-    private fun previewBendpoint(point: Point) {
+    private fun previewBendpoint(point: Point, bypass: Boolean = false) {
         val original = originalWire ?: return
         val handle = bendDrag ?: return
         val index = handle.pointIndex?.minus(1) ?: handle.segmentIndex!!
         val rawPosition = modelPoint(point)
-        val position = if (snapEnabled) WireSnap.dragPosition(original, rawPosition) else rawPosition
+        lastWirePointer = point
+        lastWireBypass = bypass
+        val base = if (snapEnabled) WireSnap.dragPosition(original, rawPosition) else rawPosition
+        val position = if (orthogonalEnabled && !bypass) orthogonalSnap.position(rawPosition,
+            OrthogonalWireSnap.neighbors(original, index, handle.pointIndex == null), zoom, base)
+        else { orthogonalSnap.reset(); base }
         replaceWire(if (handle.pointIndex == null) DiagramEdits.dragMidpoint(original, index, position)
             else DiagramEdits.dragBendpoint(original, index, position))
     }
@@ -1129,6 +1181,45 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             maxOf(300, preferredSize.height, ceil((points.maxOfOrNull { it.y } ?: 0.0) + origin.y + 60).toInt()))
         revalidate()
         repaint()
+    }
+
+    private fun updateCreationPoint(point: Point?, bypass: Boolean = false) {
+        fun screenBounds(): Rectangle? {
+            var bounds = ghostNode?.let { Rectangle2D.Double(it.location.x, it.location.y, it.width, it.height) }
+            for (guide in alignmentGuides) {
+                val padding = if (guide.distance == null) 5.0 else {
+                    val text = String.format(Locale.ROOT, "%.1f", guide.distance).removeSuffix(".0") + " px"
+                    maxOf(getFontMetrics(diagramFont).stringWidth(text).toDouble(), getFontMetrics(diagramFont).height.toDouble()) + 12
+                }
+                val guideBounds = Rectangle2D.Double(minOf(guide.from.x, guide.to.x) - padding,
+                    minOf(guide.from.y, guide.to.y) - padding,
+                    kotlin.math.abs(guide.to.x - guide.from.x) + padding * 2,
+                    kotlin.math.abs(guide.to.y - guide.from.y) + padding * 2)
+                if (bounds == null) bounds = guideBounds else bounds.add(guideBounds)
+            }
+            return bounds?.let {
+                Rectangle2D.Double(origin.x + pan.x + it.x * zoom, origin.y + pan.y + it.y * zoom,
+                    it.width * zoom, it.height * zoom).bounds.apply {
+                    grow(ceil(4 * maxOf(1.0, zoom)).toInt(), ceil(4 * maxOf(1.0, zoom)).toInt())
+                }
+            }
+        }
+        val before = screenBounds()
+        creationPointer = point
+        creationSnapBypassed = bypass
+        val area = visibleRect.takeUnless { it.isEmpty } ?: Rectangle(0, 0, width, height)
+        creationPoint = point?.takeIf {
+            (width <= 0 || height <= 0 || area.contains(it)) && miniMapProjection?.frame?.contains(it) != true
+        }
+            ?.let(::modelPoint)
+        val result = if (snapEnabled && !bypass) ghostNode?.let {
+            DiagramAlignment.move(listOf(it), diagram.nodes, DiagramPoint(0.0, 0.0))
+        } else null
+        if (result != null) creationPoint = creationPoint!! + result.delta
+        alignmentGuides = result?.guides.orEmpty()
+        val after = screenBounds()
+        val dirty = before?.let { old -> after?.let(old::union) ?: old } ?: after
+        dirty?.intersection(area)?.takeIf { !it.isEmpty }?.let { repaint(it.x, it.y, it.width, it.height) }
     }
 
     override fun paintComponent(graphics: Graphics) {

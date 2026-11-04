@@ -38,6 +38,8 @@ class ChildCreationToolbar(
     private val onCommit: () -> Unit = {},
     private val canRollback: () -> Boolean = { false },
     private val onRollback: () -> Unit = {},
+    private val orthogonalState: () -> Boolean = { false },
+    private val onOrthogonalChanged: (Boolean) -> Unit = {},
 ) : JPanel(BorderLayout()) {
     var onCreationTrace: ((String) -> Unit)? = null
     var selectedPreset: ActivityPreset? = null
@@ -175,6 +177,16 @@ class ChildCreationToolbar(
             event.presentation.putClientProperty(com.intellij.openapi.actionSystem.ex.ActionUtil.SHOW_TEXT_IN_TOOLBAR, true)
         }
     }
+    val orthogonalAction: ToggleAction = object : ToggleAction("Orthogonal",
+        "Wire 핸들을 수평·수직 위치에 자석처럼 붙이기 (Alt: 임시 해제)", null), DumbAware {
+        override fun getActionUpdateThread() = ActionUpdateThread.EDT
+        override fun isSelected(event: AnActionEvent) = orthogonalState()
+        override fun setSelected(event: AnActionEvent, selected: Boolean) { onOrthogonalChanged(selected); refresh() }
+        override fun update(event: AnActionEvent) {
+            super.update(event)
+            event.presentation.putClientProperty(com.intellij.openapi.actionSystem.ex.ActionUtil.SHOW_TEXT_IN_TOOLBAR, true)
+        }
+    }
     val diagramPropertiesAction: AnAction = object : com.intellij.openapi.project.DumbAwareAction(
         "Properties", "GlueDiagram Properties와 Description 편집", null) {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
@@ -217,6 +229,7 @@ class ChildCreationToolbar(
         add(splitAction)
         add(wireCreationAction)
         add(snapAction)
+        add(orthogonalAction)
         add(diagramPropertiesAction)
         if (showCommit) { add(commitAction); add(rollbackAction) }
     }

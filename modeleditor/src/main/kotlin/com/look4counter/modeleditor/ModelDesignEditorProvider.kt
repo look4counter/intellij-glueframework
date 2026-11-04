@@ -51,7 +51,10 @@ class ModelDesignEditorProvider : FileEditorProvider, DumbAware {
 private class ModelDesignEditor(private val project: Project, private val file: VirtualFile) : UserDataHolderBase(), FileEditor {
     private val changes = PropertyChangeSupport(this)
     private val snapSettings = ModelSnapSettings.getInstance()
-    private val canvas = ModelDiagramCanvas().apply { snapEnabled = snapSettings.enabled }
+    private val canvas = ModelDiagramCanvas().apply {
+        snapEnabled = snapSettings.enabled
+        orthogonalEnabled = snapSettings.orthogonalEnabled
+    }
     private val document = FileDocumentManager.getInstance().getDocument(file)
     private val serviceAdapter = if (ServiceDiagramAdapter.accepts(project, file)) ServiceDiagramAdapter(project, file) else null
     private var disposed = false
@@ -84,7 +87,9 @@ private class ModelDesignEditor(private val project: Project, private val file: 
         canCommit = ::canCommitServiceChanges,
         onCommit = ::commitServiceChanges,
         canRollback = ::canCommitServiceChanges,
-        onRollback = ::rollbackPendingChanges)
+        onRollback = ::rollbackPendingChanges,
+        orthogonalState = { snapSettings.orthogonalEnabled },
+        onOrthogonalChanged = { snapSettings.orthogonalEnabled = it })
     private val panel = JBPanel<JBPanel<*>>(BorderLayout()).apply {
         isFocusable = true
         add(creationToolbar, BorderLayout.NORTH)
@@ -98,11 +103,13 @@ private class ModelDesignEditor(private val project: Project, private val file: 
                 val update = Runnable {
                     if (!disposed && !project.isDisposed) {
                         canvas.snapEnabled = snapSettings.enabled
+                        canvas.orthogonalEnabled = snapSettings.orthogonalEnabled
                         creationToolbar.refresh()
                     }
                 }
                 if (application.isDispatchThread) update.run() else application.invokeLater(update)
             }
+            override fun orthogonalChanged(enabled: Boolean) = snapChanged(snapSettings.enabled)
         })
         canvas.onCreationTrace = creationTrace::line
         creationToolbar.onCreationTrace = creationTrace::line
@@ -357,6 +364,12 @@ private class ModelDesignEditor(private val project: Project, private val file: 
     }
 
     private fun createChild(request: ChildCreationRequest) {
+        if (disposed || project.isDisposed || !file.isValid) return
+        if (request.revision != canvas.creationRevision) {
+            creationTrace.record("CREATE_CANCEL", "request=${request.requestId} input=${request.inputId} reason=mode_changed")
+            return
+        }
+        if (deferModelEdit { createChild(request) }) return
         if (!canEditStructure()) return
         if (serviceAdapter != null && request.kind != DiagramNodeKind.Activity) return
         val kind = request.kind

@@ -33,18 +33,54 @@ class ModelEditorCreationTraceTest : BasePlatformTestCase() {
         assertTrue(canvas.diagram.nodes.isEmpty())
     }
 
-    fun testSmallPressReleaseCreatesWhenClickEventIsMissingAndLargeMoveDoesNot() {
+    fun testPressReleaseAndDragCreateOnceAtReleasePosition() {
         val canvas = ModelDiagramCanvas().apply { setSize(600, 400); setCreationKind(DiagramNodeKind.Activity) }
         var submitted = 0
-        canvas.onChildCreateRequested = { _, _ -> submitted++ }
+        var submittedLocation: DiagramPoint? = null
+        canvas.onChildCreateRequested = { _, location -> submitted++; submittedLocation = location }
         canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, 1000, 0, 300, 200, 1, false, MouseEvent.BUTTON1))
         canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, 1010, 0, 301, 201, 1, false, MouseEvent.BUTTON1))
         assertEquals(1, submitted)
         canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, 1010, 0, 301, 201, 1, false, MouseEvent.BUTTON1))
         assertEquals(1, submitted)
         canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, 2000, 0, 300, 200, 1, false, MouseEvent.BUTTON1))
+        val start = canvas.ghostNode!!.location
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_DRAGGED, 2005, MouseEvent.BUTTON1_DOWN_MASK,
+            320, 220, 0, false, MouseEvent.NOBUTTON))
+        val destination = canvas.ghostNode!!.location
+        assertEquals(start + DiagramPoint(20.0, 20.0), destination)
         canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, 2010, 0, 320, 220, 1, false, MouseEvent.BUTTON1))
-        assertEquals(1, submitted)
+        assertEquals(2, submitted)
+        assertEquals(destination, canvas.ghostNode!!.location)
+        assertEquals(destination, submittedLocation)
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, 2010, 0, 320, 220, 1, false, MouseEvent.BUTTON1))
+        assertEquals(2, submitted)
+    }
+
+    fun testCreationDragRejectsOutsideMiniMapAndCancelledGesture() {
+        val canvas = ModelDiagramCanvas().apply {
+            display(ModelDiagram(listOf(DiagramNode(DiagramNodeKind.Activity, "1", "Existing",
+                DiagramPoint(20.0, 20.0), 100.0, 30.0)), emptyList()))
+            setSize(600, 400)
+            setCreationKind(DiagramNodeKind.Activity)
+        }
+        var submitted = 0
+        canvas.onChildCreateRequested = { _, _ -> submitted++ }
+        fun press() = canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, 1000, 0,
+            300, 200, 1, false, MouseEvent.BUTTON1))
+        fun release(x: Int, y: Int) = canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, 1010, 0,
+            x, y, 1, false, MouseEvent.BUTTON1))
+        press()
+        release(-20, 200)
+        assertNull(canvas.ghostNode)
+        press()
+        val frame = canvas.miniMapProjection!!.frame
+        release(frame.centerX.toInt(), frame.centerY.toInt())
+        assertNull(canvas.ghostNode)
+        press()
+        canvas.setCreationKind(null)
+        release(340, 220)
+        assertEquals(0, submitted)
     }
 
     fun testRawObservationDoesNotConsumeAndOnlyRecordsCreationPointerEvents() {

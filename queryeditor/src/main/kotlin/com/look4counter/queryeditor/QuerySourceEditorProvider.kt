@@ -7,10 +7,13 @@ import com.intellij.openapi.fileEditor.FileEditorState
 import com.intellij.openapi.fileEditor.FileEditorStateLevel
 import com.intellij.openapi.fileEditor.TextEditor
 import com.intellij.openapi.fileEditor.impl.text.TextEditorProvider
+import com.intellij.openapi.fileEditor.impl.text.AsyncEditorLoader
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.util.Disposer
 import com.intellij.openapi.vfs.VirtualFile
+import com.intellij.openapi.editor.ScrollType
+import com.intellij.psi.PsiDocumentManager
 import org.jdom.Element
 
 class QuerySourceEditorProvider : FileEditorProvider, DumbAware {
@@ -18,7 +21,7 @@ class QuerySourceEditorProvider : FileEditorProvider, DumbAware {
 
     override fun createEditor(project: Project, file: VirtualFile): FileEditor =
         com.intellij.openapi.application.ApplicationManager.getApplication().runWriteIntentReadAction<FileEditor, RuntimeException> {
-            QuerySourceEditor(TextEditorProvider.getInstance().createEditor(project, file) as TextEditor)
+            QuerySourceEditor(project, file, TextEditorProvider.getInstance().createEditor(project, file) as TextEditor)
         }
 
     override fun getEditorTypeId(): String = "glue-query-source"
@@ -31,7 +34,10 @@ class QuerySourceEditorProvider : FileEditorProvider, DumbAware {
         TextEditorProvider.getInstance().writeState(state, project, targetElement)
 }
 
-private class QuerySourceEditor(private val delegate: TextEditor) : TextEditor by delegate {
+private class QuerySourceEditor(private val project: Project, private val sourceFile: VirtualFile,
+                                private val delegate: TextEditor) : TextEditor by delegate {
+    private var disposed = false
+    private var tabRevision = 0L
     init {
         Disposer.register(this, delegate)
     }
@@ -39,8 +45,29 @@ private class QuerySourceEditor(private val delegate: TextEditor) : TextEditor b
     override fun getName(): String = "Source"
     override fun getState(level: FileEditorStateLevel): FileEditorState = delegate.getState(level)
     override fun setState(state: FileEditorState, exactState: Boolean) = delegate.setState(state, exactState)
-    override fun selectNotify() = delegate.selectNotify()
-    override fun deselectNotify() = delegate.deselectNotify()
+    override fun selectNotify() {
+        delegate.selectNotify()
+        val revision = ++tabRevision
+        AsyncEditorLoader.performWhenLoaded(editor) {
+            QueryTabNavigation.whenWriteSafe(project, sourceFile, { !disposed && revision == tabRevision && !editor.isDisposed }) {
+                val document = editor.document
+                PsiDocumentManager.getInstance(project).commitDocument(document)
+                val queries = QueryMapDocumentModel(project, sourceFile).snapshot().queries
+                val selected = document.getUserData(QueryTabNavigation.designQuery)?.element
+                val query = queries.firstOrNull { it.target.element == selected } ?: queries.firstOrNull()
+                val offset = query?.target?.element?.textRange?.startOffset ?: return@whenWriteSafe
+                editor.caretModel.removeSecondaryCarets()
+                editor.selectionModel.removeSelection()
+                editor.caretModel.moveToOffset(offset)
+                editor.scrollingModel.scrollToCaret(ScrollType.CENTER)
+            }
+        }
+    }
+    override fun deselectNotify() {
+        ++tabRevision
+        if (!disposed && !editor.isDisposed) editor.document.putUserData(QueryTabNavigation.sourceOffset, editor.caretModel.offset)
+        delegate.deselectNotify()
+    }
     override fun getBackgroundHighlighter() = delegate.backgroundHighlighter
     override fun getCurrentLocation() = delegate.currentLocation
     override fun getStructureViewBuilder() = delegate.structureViewBuilder
@@ -48,5 +75,8 @@ private class QuerySourceEditor(private val delegate: TextEditor) : TextEditor b
     override fun getFilesToRefresh() = delegate.filesToRefresh
     override fun getTabActions() = delegate.tabActions
     override fun isEditorLoaded(): Boolean = delegate.isEditorLoaded
-    override fun dispose() = Unit
+    override fun dispose() {
+        disposed = true
+        ++tabRevision
+    }
 }

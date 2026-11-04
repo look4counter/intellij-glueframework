@@ -114,6 +114,7 @@ internal class QueryDesignEditor(private val project: Project, private val file:
     private var disposed = false
     private var selectionRevision = 0L
     private var navigationRevision = 0L
+    private var tabRevision = 0L
     private var notice: String? = null
 
     private data class SqlBuffer(val target: SmartPsiElementPointer<XmlTag>, val document: Document, var original: String)
@@ -330,6 +331,7 @@ internal class QueryDesignEditor(private val project: Project, private val file:
                 if (requestedIndex >= 0) file.putUserData(QueryNavigation.requestedQuery, null)
             }
             selected = queryList.selectedValue
+            model.document.putUserData(QueryTabNavigation.designQuery, selected?.target)
             val query = selected
             val editable = query != null && snapshot.problem == null && model.writable
             listButtons.forEach { (action, button) ->
@@ -397,6 +399,8 @@ internal class QueryDesignEditor(private val project: Project, private val file:
     override fun getName(): String = "Design"
     override fun getFile(): VirtualFile = file
     override fun selectQuery(id: String): Boolean {
+        ++tabRevision
+        model.document.putUserData(QueryTabNavigation.sourceOffset, null)
         return navigate(++navigationRevision, id = id)
     }
 
@@ -423,6 +427,8 @@ internal class QueryDesignEditor(private val project: Project, private val file:
         return true
     }
     override fun selectQueryAtOffset(offset: Int): Boolean {
+        ++tabRevision
+        model.document.putUserData(QueryTabNavigation.sourceOffset, null)
         return navigate(++navigationRevision, offset = offset)
     }
     override fun canNavigateTo(target: com.intellij.pom.Navigatable): Boolean {
@@ -438,9 +444,31 @@ internal class QueryDesignEditor(private val project: Project, private val file:
     }
     override fun setState(state: FileEditorState) = Unit
     override fun selectNotify() {
-        scheduleRefresh()
+        val revision = ++tabRevision
+        val offset = model.document.getUserData(QueryTabNavigation.sourceOffset)
+        model.document.putUserData(QueryTabNavigation.sourceOffset, null)
+        if (offset == null) {
+            scheduleRefresh()
+            return
+        }
+        QueryTabNavigation.whenWriteSafe(project, file, { !disposed && revision == tabRevision }) {
+            ++selectionRevision
+            flushPending()
+            PsiDocumentManager.getInstance(project).commitDocument(model.document)
+            val tag = QueryNavigation.queryAtOffset(project, file, offset)
+            val queries = model.snapshot().queries
+            val preferred = queries.firstOrNull { it.target.element == tag } ?: queries.firstOrNull()
+            refresh(preferred?.target)
+            if (queryList.selectedIndex >= 0) queryList.ensureIndexIsVisible(queryList.selectedIndex)
+        }
     }
-    override fun deselectNotify() = scheduleRefresh()
+    override fun deselectNotify() {
+        val revision = ++tabRevision
+        QueryTabNavigation.whenWriteSafe(project, file, { !disposed && revision == tabRevision }) {
+            flushPending()
+            refresh()
+        }
+    }
     override fun isModified(): Boolean = FileDocumentManager.getInstance().isDocumentUnsaved(model.document)
     override fun isValid(): Boolean = file.isValid
     override fun addPropertyChangeListener(listener: PropertyChangeListener) = changes.addPropertyChangeListener(listener)

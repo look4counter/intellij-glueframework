@@ -10,8 +10,43 @@ import java.awt.image.BufferedImage
 import java.nio.file.Files
 import java.nio.file.Path
 import kotlin.system.measureNanoTime
+import javax.swing.JComponent
+import javax.swing.RepaintManager
 
 class ModelDiagramPerformanceTest : BasePlatformTestCase() {
+    fun testGhostMovementRepaintsOnlyChangedAreaWithoutTrails() {
+        val canvas = canvas(model(2000))
+        canvas.setCreationKind(DiagramNodeKind.Activity)
+        val previous = RepaintManager.currentManager(canvas)
+        var dirty: Rectangle? = null
+        val manager = object : RepaintManager() {
+            override fun addDirtyRegion(component: JComponent, x: Int, y: Int, w: Int, h: Int) {
+                if (component === canvas && w > 0 && h > 0) {
+                    val next = Rectangle(x, y, w, h)
+                    dirty = dirty?.union(next) ?: next
+                }
+            }
+        }
+        RepaintManager.setCurrentManager(manager)
+        try {
+            for (scale in listOf(0.5, 1.0, 2.0)) {
+                canvas.setZoom(scale)
+                mouse(canvas, MouseEvent.MOUSE_MOVED, 200, 150)
+                val before = render(canvas)
+                dirty = null
+                mouse(canvas, MouseEvent.MOUSE_MOVED, 215, 160)
+                val region = dirty ?: error("Ghost movement did not request repaint")
+                assertTrue("Ghost must use a partial repaint: $region", region.width * region.height < canvas.width * canvas.height / 2)
+                val graphics = before.createGraphics()
+                try { graphics.clip = region; canvas.paint(graphics) } finally { graphics.dispose() }
+                val expected = render(canvas)
+                for (x in 0 until canvas.width) for (y in 0 until canvas.height)
+                    assertEquals("Ghost trail at $scale: $x,$y", expected.getRGB(x, y), before.getRGB(x, y))
+                assertEquals(2000, canvas.diagram.nodes.size)
+            }
+        } finally { RepaintManager.setCurrentManager(previous) }
+    }
+
     private fun model(count: Int): ModelDiagram {
         val nodes = (0 until count).map { index ->
             DiagramNode(DiagramNodeKind.Activity, "n$index", "Activity $index",
