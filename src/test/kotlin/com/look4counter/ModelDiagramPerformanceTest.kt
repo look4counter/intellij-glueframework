@@ -14,6 +14,62 @@ import javax.swing.JComponent
 import javax.swing.RepaintManager
 
 class ModelDiagramPerformanceTest : BasePlatformTestCase() {
+    fun testNavigationInvalidatesImageOnAppearanceChangeAndCancel() {
+        val canvas = canvas(model(500))
+        var calls = 0
+        canvas.activityColor = { calls++; Color.WHITE }
+        render(canvas)
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, 0, MouseEvent.BUTTON3_DOWN_MASK,
+            200, 200, 1, false, MouseEvent.BUTTON3))
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_DRAGGED, 0, MouseEvent.BUTTON3_DOWN_MASK,
+            210, 210, 0, false, MouseEvent.NOBUTTON))
+        render(canvas)
+        calls = 0
+        render(canvas)
+        assertEquals(0, calls)
+        canvas.invalidateAppearance()
+        render(canvas)
+        assertTrue("Appearance changes must invalidate the navigation image", calls > 0)
+        canvas.cancelDrag()
+        assertEquals(DiagramPoint(0.0, 0.0), canvas.pan)
+        calls = 0
+        render(canvas)
+        assertTrue("Cancel must restore normal rendering", calls > 0)
+    }
+
+    fun testNavigationReusesImageAndReturnsToVectorRendering() {
+        val canvas = canvas(model(2000))
+        var calls = 0
+        canvas.activityColor = { calls++; Color.WHITE }
+        render(canvas)
+        fun panEvent(id: Int, x: Int, y: Int) {
+            canvas.dispatchEvent(MouseEvent(canvas, id, 0,
+                if (id == MouseEvent.MOUSE_RELEASED) 0 else MouseEvent.BUTTON3_DOWN_MASK,
+                x, y, 1, false, if (id == MouseEvent.MOUSE_DRAGGED) MouseEvent.NOBUTTON else MouseEvent.BUTTON3))
+        }
+        panEvent(MouseEvent.MOUSE_PRESSED, 200, 200)
+        panEvent(MouseEvent.MOUSE_DRAGGED, 210, 205)
+        render(canvas)
+        calls = 0
+        panEvent(MouseEvent.MOUSE_DRAGGED, 230, 215)
+        render(canvas)
+        assertEquals("Panning inside the snapshot must not render nodes again", 0, calls)
+        // Moving beyond the capture must still render newly exposed model content.
+        panEvent(MouseEvent.MOUSE_DRAGGED, -1000, 215)
+        render(canvas)
+        assertTrue("Uncovered areas must render model content", calls > 0)
+        panEvent(MouseEvent.MOUSE_RELEASED, -1000, 215)
+        calls = 0
+        val released = render(canvas)
+        assertTrue("Release must restore vector rendering", calls > 0)
+        val fresh = canvas(canvas.diagram)
+        fresh.navigateTo(DiagramPoint(canvas.width / 2.0 - canvas.pan.x, canvas.height / 2.0 - canvas.pan.y))
+        fresh.activityColor = { Color.WHITE }
+        val expected = render(fresh)
+        for (x in 0 until canvas.width) for (y in 0 until canvas.height)
+            assertEquals("Released navigation pixel $x,$y", expected.getRGB(x, y), released.getRGB(x, y))
+    }
+
     fun testEditingDragRepaintsOnlyChangedAreaWithoutTrails() {
         for (scale in listOf(0.5, 1.0, 1.5)) {
             val node = DiagramNode(DiagramNodeKind.Activity, "a", "Activity", DiagramPoint(60.0, 160.0), 100.0, 30.0)

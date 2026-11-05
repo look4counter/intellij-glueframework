@@ -219,6 +219,12 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         .flatMap { "${it.key}=${it.value}".lineSequence().toList() }
     val miniMapProjection: MiniMapProjection? get() {
         ensureGeometryFont()
+        navigationSnapshot?.takeIf { it.size == size && it.zoom == zoom }?.miniMap?.let { projection ->
+            val visible = visibleRect
+            return projection.copy(modelViewport = Rectangle2D.Double(
+                (visible.x - origin.x - pan.x) / zoom, (visible.y - origin.y - pan.y) / zoom,
+                visible.width / zoom, visible.height / zoom))
+        }
         val key = ProjectionKey(sceneRevision, visibleRect, origin + pan, zoom, diagramFont)
         if (projectionKey != key) {
             val boundsKey = sceneRevision to diagramFont
@@ -233,6 +239,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     }
 
     fun invalidateAppearance() {
+        clearNavigationSnapshot()
         appearanceRevision++
         clearMiniMapImage()
         repaint()
@@ -308,6 +315,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     event.consume()
                     return
                 }
+                clearNavigationSnapshot()
+                navigationSnapshotAttempted = false
                 gestureSelection = selectedNodes
                 gestureWire = selectedWire
                 gesturePan = pan
@@ -501,6 +510,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     }
                 }
                 if (last != null) {
+                    prepareNavigationSnapshot()
                     pan += DiagramPoint((event.x - last.x).toDouble(), (event.y - last.y).toDouble())
                     previous = event.point
                     if (wireCreationMode) updateWireCreation(event.point)
@@ -614,6 +624,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                 alignmentTargets = emptyList()
                 lastChildDrag = null
                 previous = null
+                clearNavigationSnapshot()
                 boxStart = null
                 selectionBox = null
                 cursor = Cursor.getDefaultCursor()
@@ -785,6 +796,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     }
 
     override fun removeNotify() {
+        clearNavigationSnapshot()
         clearMiniMapImage()
         projectionKey = null
         observedViewport?.removeChangeListener(viewportListener)
@@ -901,6 +913,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     }
 
     private fun clearGesture() {
+        clearNavigationSnapshot()
+        navigationSnapshotAttempted = false
         orthogonalSnap.reset()
         lastWirePointer = null
         wireCreationStart = null; wireCreationStartPoint = null; wireCreationPoint = null; wireCreationTarget = null
@@ -1128,6 +1142,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     }
 
     private fun replaceDiagram(value: ModelDiagram, changedNodes: Set<Int>? = null, changedWires: Set<Int>? = null) {
+        clearNavigationSnapshot()
         val partial = changedNodes != null && changedWires != null && alignmentGuides.isEmpty()
         val before = if (partial) editRepaintBounds(changedNodes, changedWires) else null
         if (changedNodes == null || changedWires == null) {
@@ -1268,63 +1283,27 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             val screenTransform = g.transform
             g.translate(origin.x + pan.x, origin.y + pan.y)
             g.scale(zoom, zoom)
-            g.color = foreground
-            g.stroke = BasicStroke(1.2f)
-            if (diagram.message != null) g.drawString(diagram.message, 0f, 18f)
-            paths.forEach { (wire, points) -> drawWire(g, wire, points, changeColor(changeHighlights.wireChanges[wire.id])) }
-            paths.filter { it.first.showsCondition }.forEach { (wire, points) -> drawLabel(g, wire, points, changeColor(changeHighlights.wireChanges[wire.id])) }
-            changeHighlights.removedWires.forEach { wire ->
-                val path = DiagramGeometry.path(wire)
-                if (path.size >= 2) drawWire(g, wire, path, changeColor(DiagramChangeKind.Removed), true)
-            }
-            diagram.nodes.forEach { drawNode(g, it, changeColor(changeHighlights.nodeChanges[it.id])) }
-            changeHighlights.removedNodes.forEach { drawNode(g, it, changeColor(DiagramChangeKind.Removed), true) }
-            drawSelection(g)
-            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-            g.stroke = BasicStroke(1.2f)
-            // The primary selection is above every other diagram element and its handles.
-            lastSelectedNode?.let { node ->
-                drawNode(g, node, changeColor(changeHighlights.nodeChanges[node.id]))
-                drawNodeSelection(g, node)
-            }
-            selectedWire?.let { wire ->
-                val points = wirePath(wire)
-                if (points.size >= 2) {
-                    drawWire(g, wire, points, changeColor(changeHighlights.wireChanges[wire.id]))
-                    if (wire.showsCondition) drawLabel(g, wire, points, changeColor(changeHighlights.wireChanges[wire.id]))
-                    drawWireSelection(g, wire)
-                }
-            }
-            ghostNode?.let { node ->
-                val ghostGraphics = g.create() as Graphics2D
+            val snapshot = navigationSnapshot
+            if (snapshot != null && snapshot.zoom == zoom && snapshot.size == size && snapshot.font == diagramFont &&
+                snapshot.background == background.rgb && snapshot.foreground == foreground.rgb) {
+                val screen = g.create() as Graphics2D
                 try {
-                    ghostGraphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                    ghostGraphics.stroke = BasicStroke(1.2f)
-                    drawNode(ghostGraphics, node)
-                } finally {
-                    ghostGraphics.dispose()
-                }
-            }
-            wireCreationPreview?.let { wire ->
-                val preview = g.create() as Graphics2D
-                try {
-                    preview.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
-                    preview.stroke = BasicStroke(1.2f)
-                    drawWire(preview, wire, DiagramGeometry.path(wire))
-                } finally { preview.dispose() }
-            }
-            if (alignmentGuides.isNotEmpty()) {
-                val guides = g.create() as Graphics2D
-                try {
-                    val clip = Area(guides.clip ?: Rectangle2D.Double(-origin.x - pan.x, -origin.y - pan.y, width.toDouble(), height.toDouble()))
-                    miniMapProjection?.frame?.let { frame -> clip.subtract(Area(Rectangle2D.Double(
-                        (frame.x - origin.x - pan.x) / zoom, (frame.y - origin.y - pan.y) / zoom,
-                        frame.width / zoom, frame.height / zoom))) }
-                    guides.clip = clip
-                    guides.color = JBColor(Color(215, 65, 135), Color(240, 105, 175))
-                    guides.stroke = BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, floatArrayOf(4f, 3f), 0f)
-                    alignmentGuides.forEach { drawAlignmentGuide(guides, it) }
-                } finally { guides.dispose() }
+                    screen.transform = screenTransform
+                    val x = snapshot.area.x + origin.x + pan.x - snapshot.offset.x
+                    val y = snapshot.area.y + origin.y + pan.y - snapshot.offset.y
+                    screen.drawImage(snapshot.image, x.roundToInt(), y.roundToInt(), snapshot.area.width, snapshot.area.height, null)
+                    val uncovered = Area(screen.clip ?: visibleRect)
+                    uncovered.subtract(Area(Rectangle2D.Double(x, y, snapshot.area.width.toDouble(), snapshot.area.height.toDouble())))
+                    if (!uncovered.isEmpty) {
+                        screen.clip = uncovered
+                        screen.translate(origin.x + pan.x, origin.y + pan.y)
+                        screen.scale(zoom, zoom)
+                        drawDiagramScene(screen)
+                    }
+                } finally { screen.dispose() }
+            } else {
+                clearNavigationSnapshot()
+                drawDiagramScene(g)
             }
             g.transform = screenTransform
             g.color = wireColor
@@ -1337,6 +1316,110 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             }
             drawMiniMap(g)
         } finally { g.dispose() }
+    }
+
+    private fun drawDiagramScene(g: Graphics2D) {
+        g.color = foreground
+        g.stroke = BasicStroke(1.2f)
+        if (diagram.message != null) g.drawString(diagram.message, 0f, 18f)
+        paths.forEach { (wire, points) -> drawWire(g, wire, points, changeColor(changeHighlights.wireChanges[wire.id])) }
+        paths.filter { it.first.showsCondition }.forEach { (wire, points) -> drawLabel(g, wire, points, changeColor(changeHighlights.wireChanges[wire.id])) }
+        changeHighlights.removedWires.forEach { wire ->
+            val path = DiagramGeometry.path(wire)
+            if (path.size >= 2) drawWire(g, wire, path, changeColor(DiagramChangeKind.Removed), true)
+        }
+        diagram.nodes.forEach { drawNode(g, it, changeColor(changeHighlights.nodeChanges[it.id])) }
+        changeHighlights.removedNodes.forEach { drawNode(g, it, changeColor(DiagramChangeKind.Removed), true) }
+        drawSelection(g)
+        g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+        g.stroke = BasicStroke(1.2f)
+        // The primary selection is above every other diagram element and its handles.
+        lastSelectedNode?.let { node ->
+            drawNode(g, node, changeColor(changeHighlights.nodeChanges[node.id]))
+            drawNodeSelection(g, node)
+        }
+        selectedWire?.let { wire ->
+            val points = wirePath(wire)
+            if (points.size >= 2) {
+                drawWire(g, wire, points, changeColor(changeHighlights.wireChanges[wire.id]))
+                if (wire.showsCondition) drawLabel(g, wire, points, changeColor(changeHighlights.wireChanges[wire.id]))
+                drawWireSelection(g, wire)
+            }
+        }
+        ghostNode?.let { node ->
+            val ghostGraphics = g.create() as Graphics2D
+            try {
+                ghostGraphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                ghostGraphics.stroke = BasicStroke(1.2f)
+                drawNode(ghostGraphics, node)
+            } finally {
+                ghostGraphics.dispose()
+            }
+        }
+        wireCreationPreview?.let { wire ->
+            val preview = g.create() as Graphics2D
+            try {
+                preview.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+                preview.stroke = BasicStroke(1.2f)
+                drawWire(preview, wire, DiagramGeometry.path(wire))
+            } finally { preview.dispose() }
+        }
+        if (alignmentGuides.isNotEmpty()) {
+            val guides = g.create() as Graphics2D
+            try {
+                val clip = Area(guides.clip ?: Rectangle2D.Double(-origin.x - pan.x, -origin.y - pan.y, width.toDouble(), height.toDouble()))
+                miniMapProjection?.frame?.let { frame -> clip.subtract(Area(Rectangle2D.Double(
+                    (frame.x - origin.x - pan.x) / zoom, (frame.y - origin.y - pan.y) / zoom,
+                    frame.width / zoom, frame.height / zoom))) }
+                guides.clip = clip
+                guides.color = JBColor(Color(215, 65, 135), Color(240, 105, 175))
+                guides.stroke = BasicStroke(1f, BasicStroke.CAP_BUTT, BasicStroke.JOIN_MITER, 10f, floatArrayOf(4f, 3f), 0f)
+                alignmentGuides.forEach { drawAlignmentGuide(guides, it) }
+            } finally { guides.dispose() }
+        }
+    }
+
+    private data class NavigationSnapshot(val image: BufferedImage, val area: Rectangle,
+                                          val offset: DiagramPoint, val zoom: Double, val size: Dimension, val font: Font,
+                                          val background: Int, val foreground: Int, val miniMap: MiniMapProjection?)
+    private var navigationSnapshot: NavigationSnapshot? = null
+    private var navigationSnapshotAttempted = false
+
+    private fun clearNavigationSnapshot() {
+        navigationSnapshot?.image?.flush()
+        navigationSnapshot = null
+    }
+
+    private fun prepareNavigationSnapshot() {
+        if (navigationSnapshotAttempted) return
+        navigationSnapshotAttempted = true
+        val visible = visibleRect
+        if (visible.isEmpty || creationKind != null || wireCreationMode) return
+        ensureGeometryFont()
+        val area = Rectangle(visible).apply { grow(visible.width / 2, visible.height / 2) }
+        val transform = graphicsConfiguration?.defaultTransform
+        val requestedScale = maxOf(transform?.scaleX ?: 1.0, transform?.scaleY ?: 1.0)
+        val scale = minOf(requestedScale, kotlin.math.sqrt(16_000_000.0 / (area.width.toDouble() * area.height)))
+        val image = try {
+            BufferedImage(maxOf(1, (area.width * scale).toInt()), maxOf(1, (area.height * scale).toInt()),
+                BufferedImage.TYPE_INT_ARGB)
+        } catch (_: OutOfMemoryError) {
+            return
+        }
+        val g = image.createGraphics()
+        try {
+            g.scale(image.width.toDouble() / area.width, image.height.toDouble() / area.height)
+            g.translate(-area.x.toDouble(), -area.y.toDouble())
+            g.clip = area
+            g.font = diagramFont
+            g.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
+            g.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
+            g.translate(origin.x + pan.x, origin.y + pan.y)
+            g.scale(zoom, zoom)
+            drawDiagramScene(g)
+        } finally { g.dispose() }
+        navigationSnapshot = NavigationSnapshot(image, area, origin + pan, zoom, Dimension(size), diagramFont,
+            background.rgb, foreground.rgb, miniMapProjection)
     }
 
     private fun drawAlignmentGuide(g: Graphics2D, guide: AlignmentGuide) {
