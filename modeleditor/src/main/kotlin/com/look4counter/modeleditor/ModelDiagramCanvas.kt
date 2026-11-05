@@ -1508,10 +1508,21 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             g.composite = AlphaComposite.SrcOver
             g.drawImage(miniMapImage, frame.x, frame.y, frame.width, frame.height, null)
             g.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.78f)
-            g.clip = originalClip
             g.color = JBColor.BLUE
             g.stroke = BasicStroke(1.2f)
-            g.draw(projection.viewport)
+            if (navigationSnapshot == null) {
+                g.clip = originalClip
+                g.draw(projection.viewport)
+                return
+            }
+            val area = projection.contentArea
+            val viewport = projection.viewport
+            val indicatorWidth = minOf(viewport.width, area.width - 2.0)
+            val indicatorHeight = minOf(viewport.height, area.height - 2.0)
+            g.draw(Rectangle2D.Double(
+                viewport.x.coerceIn(area.minX + 1.0, area.maxX - 1.0 - indicatorWidth),
+                viewport.y.coerceIn(area.minY + 1.0, area.maxY - 1.0 - indicatorHeight),
+                indicatorWidth, indicatorHeight))
         } finally {
             g.dispose()
         }
@@ -1599,10 +1610,18 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                 g.draw(shape)
             }
             DiagramNodeKind.FinalState -> {
-                g.color = outlineColor ?: Color.BLACK
-                if (outlineColor != null) g.stroke = BasicStroke(2.8f)
-                g.draw(Ellipse2D.Double(x, y, 20.0, 20.0))
-                if (!outlineOnly) { g.color = Color.BLACK; g.fill(Ellipse2D.Double(x + 3, y + 3, 15.0, 15.0)) }
+                val stateGraphics = g.create() as Graphics2D
+                try {
+                    // Stroke normalization shifts outlines independently of filled shapes.
+                    stateGraphics.setRenderingHint(RenderingHints.KEY_STROKE_CONTROL, RenderingHints.VALUE_STROKE_PURE)
+                    stateGraphics.color = outlineColor ?: Color.BLACK
+                    if (outlineColor != null) stateGraphics.stroke = BasicStroke(2.8f)
+                    stateGraphics.draw(Ellipse2D.Double(x, y, 20.0, 20.0))
+                    if (!outlineOnly) {
+                        stateGraphics.color = Color.BLACK
+                        stateGraphics.fill(Ellipse2D.Double(x + 2.5, y + 2.5, 15.0, 15.0))
+                    }
+                } finally { stateGraphics.dispose() }
             }
         }
         g.stroke = oldStroke

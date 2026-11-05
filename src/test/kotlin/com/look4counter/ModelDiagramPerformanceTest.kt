@@ -14,6 +14,40 @@ import javax.swing.JComponent
 import javax.swing.RepaintManager
 
 class ModelDiagramPerformanceTest : BasePlatformTestCase() {
+    fun testFinalStateRenderedCirclesShareCenter() {
+        val canvas = canvas(ModelDiagram(emptyList(), emptyList()))
+        val node = DiagramNode(DiagramNodeKind.FinalState, "final", "", DiagramPoint(20.0, 20.0), 20.0, 20.0)
+        val draw = ModelDiagramCanvas::class.java.getDeclaredMethod("drawNode", java.awt.Graphics2D::class.java,
+            DiagramNode::class.java, Color::class.java, Boolean::class.javaPrimitiveType).apply { isAccessible = true }
+        for (scale in listOf(1.0, 1.5, 2.0)) {
+            val image = BufferedImage(100, 100, BufferedImage.TYPE_INT_RGB)
+            val g = image.createGraphics()
+            try {
+                g.color = Color.WHITE
+                g.fillRect(0, 0, 100, 100)
+                g.setRenderingHint(java.awt.RenderingHints.KEY_ANTIALIASING, java.awt.RenderingHints.VALUE_ANTIALIAS_ON)
+                g.stroke = java.awt.BasicStroke(1.2f)
+                g.scale(scale, scale)
+                draw.invoke(canvas, g, node, null, false)
+            } finally { g.dispose() }
+            val weights = DoubleArray(2)
+            val xs = DoubleArray(2)
+            val ys = DoubleArray(2)
+            val center = 30.0 * scale
+            for (x in 0 until 100) for (y in 0 until 100) {
+                val weight = 255 - Color(image.getRGB(x, y)).red
+                if (weight == 0) continue
+                val radius = kotlin.math.hypot(x + 0.5 - center, y + 0.5 - center) / scale
+                val part = if (radius < 8.4) 0 else 1
+                weights[part] += weight
+                xs[part] += (x + 0.5) * weight
+                ys[part] += (y + 0.5) * weight
+            }
+            assertEquals("Circle x centers at scale $scale", xs[0] / weights[0], xs[1] / weights[1], 0.2)
+            assertEquals("Circle y centers at scale $scale", ys[0] / weights[0], ys[1] / weights[1], 0.2)
+        }
+    }
+
     fun testNavigationInvalidatesImageOnAppearanceChangeAndCancel() {
         val canvas = canvas(model(500))
         var calls = 0

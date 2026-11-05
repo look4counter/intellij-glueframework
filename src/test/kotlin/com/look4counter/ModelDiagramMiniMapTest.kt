@@ -18,6 +18,28 @@ import javax.imageio.ImageIO
 import javax.swing.JScrollPane
 
 class ModelDiagramMiniMapTest : BasePlatformTestCase() {
+    fun testPanningViewportIndicatorStaysVisibleInsideMiniMap() {
+        for ((dx, dy) in listOf(2000 to 0, -2000 to 0, 0 to 2000, 0 to -2000)) {
+            val canvas = canvas()
+            render(canvas)
+            mouse(canvas, MouseEvent.MOUSE_PRESSED, 200, 200, MouseEvent.BUTTON3)
+            mouse(canvas, MouseEvent.MOUSE_DRAGGED, 200 + dx, 200 + dy, MouseEvent.BUTTON3)
+            val image = render(canvas)
+            val area = canvas.miniMapProjection!!.contentArea
+            var bluePixels = 0
+            for (x in 0 until image.width) for (y in 0 until image.height) {
+                val color = Color(image.getRGB(x, y), true)
+                if (color.blue > color.red + 30 && color.blue > color.green + 30) {
+                    bluePixels++
+                    assertTrue("Viewport indicator escaped minimap: $dx,$dy at $x,$y", area.contains(x.toDouble(), y.toDouble()))
+                }
+            }
+            assertTrue("Viewport indicator must stay visible: $dx,$dy", bluePixels > 0)
+            mouse(canvas, MouseEvent.MOUSE_RELEASED, 200 + dx, 200 + dy, MouseEvent.BUTTON3)
+            assertWholeOverviewFits(canvas.miniMapProjection!!)
+        }
+    }
+
     private fun activity(x: Double, y: Double) = DiagramNode(DiagramNodeKind.Activity, "a", "Activity", DiagramPoint(x, y), 100.0, 30.0)
     private fun state(x: Double, y: Double) = DiagramNode(DiagramNodeKind.InitialState, "b", "", DiagramPoint(x, y), 20.0, 20.0)
     private fun diagram(a: DiagramNode = activity(20.0, 40.0), b: DiagramNode = state(460.0, 60.0)): ModelDiagram {

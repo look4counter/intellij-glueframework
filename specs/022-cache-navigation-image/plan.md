@@ -22,3 +22,15 @@ Kotlin, Swing Graphics2D, BufferedImage, 기존 IntelliJ 플랫폼 테스트를 
 
 순서: 동작 회귀 검증 작성 → 이미지 수명과 렌더링 통합 → 관련 테스트 → 수렴 점검.
 패닝 이미지에 시작 시 미니맵 투영도 보관한다. 이동 중 배경 투영은 재사용하고 현재 화면 영역만 갱신하여 미니맵 전체 렌더링을 방지한다.
+
+## 패닝 표시 경계 보완 계획
+
+미니맵의 모델 좌표와 고정 투영은 유지한다. ModelDiagramCanvas.drawMiniMap에서 표시 사각형만 콘텐츠 영역의 안쪽 1픽셀 여백으로 제한하고 콘텐츠 클립을 유지한다. 큰 이동에서는 표시가 가장자리에 머문다. ModelDiagramMiniMapTest에서 네 방향의 파란 픽셀 위치와 표시 유지를 검사한다.
+
+## 종료 상태 중심 보정 계획
+
+ModelDiagramCanvas.drawNode의 FinalState 안쪽 원 지름 15를 유지하면서 오프셋을 (20 - 15) / 2인 2.5로 보정한다. 메인 화면과 미니맵, 패닝 이미지가 같은 함수를 공유하므로 모두 반영된다. 작은 좌표 보정은 중심 산술 검토와 기존 캔버스 회귀 테스트로 확인한다.
+
+## 종료 상태 픽셀 정렬 계획
+
+ModelDiagramCanvas.drawNode의 FinalState 렌더링에 한해 KEY_STROKE_CONTROL의 VALUE_STROKE_PURE를 적용하여 윤곽과 채움이 동일한 기하 좌표를 사용하게 한다. 기존 그래픽 상태는 복원한다. ModelDiagramPerformanceTest에 실제 픽셀의 내부 원·외부 원 중심을 비교하는 회귀 검증을 추가해 수정 전 재현을 확인한다. 외부 라이브러리나 API 변경은 없다.
