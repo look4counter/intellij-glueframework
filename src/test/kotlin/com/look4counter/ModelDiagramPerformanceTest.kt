@@ -14,6 +14,79 @@ import javax.swing.JComponent
 import javax.swing.RepaintManager
 
 class ModelDiagramPerformanceTest : BasePlatformTestCase() {
+    fun testEditingDragRepaintsOnlyChangedAreaWithoutTrails() {
+        for (scale in listOf(0.5, 1.0, 1.5)) {
+            val node = DiagramNode(DiagramNodeKind.Activity, "a", "Activity", DiagramPoint(60.0, 160.0), 100.0, 30.0)
+            val end = node.copy(id = "b", location = DiagramPoint(240.0, 160.0))
+            val wire = DiagramWire(0, "w", "a long wire condition", node, end, null, null,
+                listOf(DiagramBendpoint(DiagramPoint(90.0, 25.0), DiagramPoint(-90.0, 25.0), 0.5)))
+            // Move, resize, bendpoint and endpoint gestures, with a connected labelled wire.
+            for ((x, y) in listOf(90 to 175, 160 to 175, 200 to 200, 160 to 182)) {
+                val canvas = canvas(ModelDiagram(listOf(node, end), listOf(wire)))
+                canvas.setZoom(scale)
+                canvas.navigateTo(DiagramPoint(200.0, 160.0))
+                canvas.selectNodesByIds(setOf("a"))
+                if (x == 200 || y == 182) canvas.selectWireByIndex(0)
+                val position = if (y == 182) canvas.wirePath(wire).first() else DiagramPoint(x.toDouble(), y.toDouble())
+                val press = java.awt.Point((canvas.pan.x + position.x * canvas.zoom).toInt(),
+                    (canvas.pan.y + position.y * canvas.zoom).toInt())
+                mouse(canvas, MouseEvent.MOUSE_PRESSED, press.x, press.y)
+                var image = render(canvas)
+                val previous = RepaintManager.currentManager(canvas)
+                var dirty: Rectangle? = null
+                RepaintManager.setCurrentManager(object : RepaintManager() {
+                    override fun addDirtyRegion(component: JComponent, x: Int, y: Int, w: Int, h: Int) {
+                        if (component === canvas && w > 0 && h > 0)
+                            dirty = dirty?.union(Rectangle(x, y, w, h)) ?: Rectangle(x, y, w, h)
+                    }
+                })
+                try {
+                    repeat(3) { step ->
+                        dirty = null
+                        mouse(canvas, MouseEvent.MOUSE_DRAGGED, press.x + 20 + step * 5, press.y + 20 + step * 3)
+                        assertTrue("Gesture must edit geometry: scale=$scale gesture=$x,$y",
+                            canvas.diagram != ModelDiagram(listOf(node, end), listOf(wire)) ||
+                                canvas.wirePath(canvas.diagram.wires.single()) != DiagramGeometry.path(wire))
+                        val region = dirty ?: error("Editing did not repaint")
+                        assertTrue("Editing must use a partial repaint: $region", region.width * region.height < canvas.width * canvas.height)
+                        println("drag scale=$scale gesture=$x,$y step=$step dirtyPixels=${region.width * region.height} fullPixels=${canvas.width * canvas.height}")
+                        val graphics = image.createGraphics()
+                        try { graphics.clip = region; canvas.paint(graphics) } finally { graphics.dispose() }
+                        val expected = render(canvas)
+                        for (px in 0 until canvas.width) for (py in 0 until canvas.height)
+                            assertEquals("Drag trail at scale=$scale gesture=$x,$y step=$step pixel=$px,$py",
+                                expected.getRGB(px, py), image.getRGB(px, py))
+                        image = expected
+                    }
+                } finally { RepaintManager.setCurrentManager(previous); canvas.cancelDrag() }
+            }
+        }
+    }
+
+    fun testRemovingAlignmentGuidesRequestsFullRepaint() {
+        val node = DiagramNode(DiagramNodeKind.Activity, "a", "A", DiagramPoint(20.0, 40.0), 100.0, 30.0)
+        val canvas = canvas(ModelDiagram(listOf(node, node.copy(id = "b", location = DiagramPoint(220.0, 140.0))), emptyList()))
+        canvas.snapEnabled = true
+        mouse(canvas, MouseEvent.MOUSE_PRESSED, 70, 55)
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_DRAGGED, 0, MouseEvent.BUTTON1_DOWN_MASK,
+            167, 153, 0, false, MouseEvent.NOBUTTON))
+        assertTrue(canvas.alignmentGuides.isNotEmpty())
+        render(canvas)
+        val previous = RepaintManager.currentManager(canvas)
+        var dirty: Rectangle? = null
+        RepaintManager.setCurrentManager(object : RepaintManager() {
+            override fun addDirtyRegion(component: JComponent, x: Int, y: Int, w: Int, h: Int) {
+                if (component === canvas && w > 0 && h > 0)
+                    dirty = dirty?.union(Rectangle(x, y, w, h)) ?: Rectangle(x, y, w, h)
+            }
+        })
+        try {
+            mouse(canvas, MouseEvent.MOUSE_DRAGGED, 170, 157)
+            assertTrue(canvas.alignmentGuides.isEmpty())
+            assertEquals(Rectangle(0, 0, canvas.width, canvas.height), dirty)
+        } finally { RepaintManager.setCurrentManager(previous); canvas.cancelDrag() }
+    }
+
     fun testGhostMovementRepaintsOnlyChangedAreaWithoutTrails() {
         val canvas = canvas(model(2000))
         canvas.setCreationKind(DiagramNodeKind.Activity)

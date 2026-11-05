@@ -162,11 +162,12 @@ class ModelEditorRefreshTest : BasePlatformTestCase() {
             unsafe { click(canvas) }
             assertEquals(1, canvas.diagram.nodes.size)
             UIUtil.dispatchAllInvocationEvents()
-            assertEquals(1, canvas.diagram.nodes.size)
+            assertEquals(2, canvas.diagram.nodes.size)
+            val afterDeferredCreation = canvas.diagram
             unsafe { click(canvas, 430, 240) }
             canvas.setCreationKind(null)
             UIUtil.dispatchAllInvocationEvents()
-            assertEquals(1, canvas.diagram.nodes.size)
+            assertEquals(afterDeferredCreation, canvas.diagram)
         } finally { Disposer.dispose(editor) }
     }
     fun testMenuSelectionQueuesPresetSnapshotAndModeRestartCancelsOldRequest() {

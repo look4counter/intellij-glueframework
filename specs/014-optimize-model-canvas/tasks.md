@@ -37,3 +37,15 @@ T001 → T002 → T003 이후 사용자 이야기 1 → 2 → 3 순서로 구현
 ## 7단계: 수렴 보완
 
 - [x] T013 src/test/kotlin/com/look4counter/ModelServiceDirectEditorTest.kt의 직접 편집·복사·삭제 검증에 기존 Commit 동작을 반영하고 미적용 상태와 Commit 후 저장·실행 취소를 확인한다. FR-005, SC-004. 현재 저장 계약과 기존 검사 기대값의 불일치에 따른 검증 부분 미충족이다.
+
+## 8단계: 사용자 이야기 3의 저성능 그래픽 환경 보완
+
+- [x] T014 [US3] src/test/kotlin/com/look4counter/ModelDiagramPerformanceTest.kt에 이동·크기 조절·Wire 편집의 부분 갱신 면적과 여러 배율의 픽셀 동일성, 안내선 제거 회귀를 추가한다. FR-005, FR-007, SC-005.
+- [x] T015 [US3] modeleditor/src/main/kotlin/com/look4counter/modeleditor/ModelDiagramCanvas.kt에서 부분 변경의 이전·이후 경계와 미니맵을 갱신하고 중복 전체 갱신을 제거한다. 안내선은 안전한 전체 갱신을 유지한다. FR-007.
+- [x] T016 specs/014-optimize-model-canvas/quickstart.md에 관련 회귀·합성 모델 측정·설치 ZIP 및 수렴 결과를 기록한다. FR-006, SC-004~005.
+
+T014 → T015 → T016 순서로 기존 세 이야기의 구현을 보완한다. 최소 제공 범위는 안내선 없는 이동이며 크기 조절·Wire 편집까지 완료한다. 동일 파일 변경이므로 순차 구현한다. 테스트 결과 확인과 문서 검토는 독립적으로 가능하다.
+
+## 9단계: 수렴 보완
+
+- [x] T017 src/test/kotlin/com/look4counter/ModelEditorRefreshTest.kt의 비동기 생성 회귀에서 큐 처리 후 첫 요청이 실행되고 취소한 두 번째 요청은 실행되지 않는 현재 계약을 검증한다. 수정 전 코드에서도 재현된 잘못된 개수 기대값을 수정한다. FR-005, SC-004의 검증 부분 미충족.

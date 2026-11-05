@@ -526,7 +526,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                             node.location.x + node.width <= box.maxX && node.location.y + node.height <= box.maxY
                     }.forEach { node -> selection.remove(node); selection.add(node) }
                 } else return
-                repaint()
+                if (last != null || start != null) repaint()
                 event.consume()
             }
 
@@ -750,6 +750,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             if (bypass || !snapEnabled) AlignmentResult(DiagramPoint(widthDelta, 0.0), emptyList())
             else DiagramAlignment.resize(draggedNodes, alignmentTargets, widthDelta, left)
         }
+        val hadGuides = alignmentGuides.isNotEmpty()
         alignmentGuides = result.guides
         val moved = dragNodePositions.associate { index ->
             val node = base.nodes[index]
@@ -762,6 +763,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         val wires = base.wires.toMutableList()
         dragWirePositions.forEach { wires[it] = DiagramEdits.relocateNodes(base.wires[it], moved) }
         replaceDiagram(base.copy(nodes = nodes, wires = wires), dragNodePositions.toSet(), dragWirePositions)
+        if (hadGuides && alignmentGuides.isEmpty()) repaint()
     }
 
     private fun prepareChildDrag() {
@@ -1126,6 +1128,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     }
 
     private fun replaceDiagram(value: ModelDiagram, changedNodes: Set<Int>? = null, changedWires: Set<Int>? = null) {
+        val partial = changedNodes != null && changedWires != null && alignmentGuides.isEmpty()
+        val before = if (partial) editRepaintBounds(changedNodes, changedWires) else null
         if (changedNodes == null || changedWires == null) {
             nodePositions.clear()
             value.nodes.forEachIndexed { index, node -> nodePositions.putIfAbsent(node.id to node.kind, index) }
@@ -1162,7 +1166,36 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             }
             sceneRevision++
         }
-        repaint()
+        if (partial) {
+            val after = editRepaintBounds(changedNodes, changedWires)
+            val dirty = before?.let { old -> after?.let(old::union) ?: old } ?: after
+            dirty?.intersection(visibleRect)?.takeUnless { it.isEmpty }?.let {
+                repaint(it.x, it.y, it.width, it.height)
+            }
+        } else repaint()
+    }
+
+    private fun editRepaintBounds(nodes: Set<Int>, wires: Set<Int>): Rectangle? {
+        var result: Rectangle? = null
+        fun include(bounds: Rectangle) {
+            result = result?.union(bounds) ?: bounds
+        }
+        fun includeModel(bounds: Rectangle2D) {
+            // Cover arrows, rounded selection handles, highlight strokes and antialiasing.
+            include(Rectangle2D.Double(origin.x + pan.x + (bounds.x - 12) * zoom,
+                origin.y + pan.y + (bounds.y - 12) * zoom,
+                (bounds.width + 24) * zoom, (bounds.height + 24) * zoom).bounds.apply { grow(2, 2) })
+        }
+        nodes.forEach { includeModel(modelNodeBounds(diagram.nodes[it])) }
+        wires.forEach { position ->
+            // Endpoint previews may already have changed: retain the last rendered geometry.
+            wireRenderData[diagram.wires[position].index]?.let { data ->
+                includeModel(data.bounds)
+                data.label?.let(::includeModel)
+            }
+        }
+        miniMapProjection?.frame?.let { include(Rectangle(it).apply { grow(2, 2) }) }
+        return result
     }
 
     private fun updateBounds() {

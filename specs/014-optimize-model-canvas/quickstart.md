@@ -48,3 +48,16 @@ ModelDiagramPerformanceTest 7개, ModelEditorFeaturesTest 15개, ModelDiagramTes
 검증 로그는 build/model-canvas-verified.log와 build/model-canvas-service-verified.log, 사례별 결과는 build/model-canvas-validation.json이다. 직접 편집 검증에는 기존 Commit 전에는 Source가 유지되고 Commit 후에 변경되는 것과 실행 취소·재실행·연결 재투영을 포함한다. 저장 의미나 제품 동작은 수정하지 않았다.
 
 최종 수렴에서 기능 요구사항 6개, 성공 기준 4개, 사용자 이야기 3개와 캐시·클립·부분 갱신 설계를 현재 코드 및 테스트와 대조했다. 보완 작업 T013까지 완료했으며 누락·부분 구현·상충·범위 밖 구현은 0개다. 헌법은 미작성 템플릿이므로 추가 원칙 검사를 생략했다.
+
+## 2026-11-06 저성능 그래픽 환경 드래그 보완
+
+- 명세·명확화·계획·작업·분석 후 기존 전체 갱신 요청을 부분 변경 경계로 연결했다. 명세 품질은 16/16 통과하며 분석에서 요구사항 7개 전부 작업에 연결되고 모호함·충돌은 없었다. 확장 훅 설정은 없다.
+- 이동·크기 조절·꺾임점·끝점 미리보기의 연속 3프레임을 배율 50%·100%·150%에서 검증했다. 부분 갱신 누적 결과와 전체 갱신 결과가 픽셀 단위로 일치한다. 안내선 제거 시 전체 갱신도 검증했다.
+- 동일 600×400 화면의 수정 전 요청 면적은 240,000픽셀이었다. 수정 후 36개 드래그 프레임은 73,851~148,720픽셀로 약 38~69% 감소했다. 수정 전 코드에서는 새 부분 갱신 검사가 실패하고 수정 후에는 통과하는 것을 확인했다. 실제 GPU 체감 개선율과는 구분한다.
+- 합성 모델의 전체 그리기 중앙값은 500개에서 1.10ms, 2,000개에서 1.33ms였다. 15회 드래그 계산은 각각 0.99ms·1.27ms였다. 이는 현재 환경의 관찰값이며 시간 제한 테스트나 GPU 성능 보장은 아니다. 측정 파일은 `build/reports/model-canvas-current.csv`다.
+- 관련 211개 테스트 중 최초 실행에서 210개가 통과했다. 생성 모드 테스트의 큐 처리 후 개수 기대값이 현재 계약과 달랐으며 수정 전 코드에서도 같은 실패를 재현했다. 수렴 보완 T017에서 첫 생성 요청 실행과 취소한 후속 요청의 전체 모델 불변을 확인하도록 검증을 수정했다.
+- 검증 근거는 `build/reports/drag-performance-verified.xml`, `drag-test-summary.json`, `drag-refresh-baseline.xml`, `drag-performance-baseline.xml`에 보관했다.
+- JDK 21.0.11은 기존 IntelliJ 캐시의 JBR을 사용했다. `.gradle-validation/gradle-9.7.1/bin/gradle.bat --offline -I .gradle-validation/ghost-offline.init.gradle test`에 모델 다이어그램·기능·새로고침·직접 편집·직각 스냅·생성 테스트를 지정했다. 설치 ZIP은 같은 환경의 `buildPlugin -x buildSearchableOptions`로 생성했다. 검색 옵션 재생성은 제외했다.
+- 설치 파일: `build/distributions/intellij-glueframework-1.0.1.zip`. 실제 사용자 IDE 및 저성능 GPU 환경의 수동 조작은 수행하지 않았다.
+- T017 수정 후 ModelEditorRefreshTest 12개 전체가 통과했다. 앞선 나머지 클래스 199개 통과와 합쳐 211개 고유 검증이 통과했다. 제품 코드는 전체 실행 이후 변경하지 않았다. 새 드래그 검사 2개와 ZIP 생성도 별도 재실행에 성공했다.
+- 최종 수렴은 요구사항 7개·성공 기준 5개·사용자 이야기 3개와 캐시·화면 필터링·부분 기하 및 화면 갱신 설계를 대조했다. T017까지 완료하여 남은 누락·부분 구현·상충·범위 밖 구현은 없다. 헌법은 미작성 템플릿으로 추가 원칙 검사는 생략했다.
