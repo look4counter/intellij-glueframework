@@ -18,14 +18,162 @@ import javax.imageio.ImageIO
 import javax.swing.JScrollPane
 
 class ModelDiagramMiniMapTest : BasePlatformTestCase() {
+    fun testPanningAutomaticallyShrinksAndEnlargesElementPixels() {
+        val canvas = canvas(diagram(activity(200.0, 180.0)))
+        val original = canvas.diagram
+        canvas.activityColor = { Color.RED }
+        fun elementWidth(image: BufferedImage): Int {
+            val area = canvas.miniMapProjection!!.contentArea.bounds
+            val xs = mutableListOf<Int>()
+            for (x in area.x until area.x + area.width) for (y in area.y until area.y + area.height) {
+                val color = Color(image.getRGB(x, y), true)
+                if (color.red > color.green + 60 && color.red > color.blue + 60) xs.add(x)
+            }
+            assertFalse(xs.isEmpty())
+            return xs.max() - xs.min() + 1
+        }
+        val width = elementWidth(render(canvas))
+        val before = canvas.miniMapProjection!!
+        mouse(canvas, MouseEvent.MOUSE_PRESSED, 200, 200, MouseEvent.BUTTON3)
+        mouse(canvas, MouseEvent.MOUSE_DRAGGED, 700, 200, MouseEvent.BUTTON3)
+        val farWidth = elementWidth(render(canvas))
+        val farScale = canvas.miniMapProjection!!.scale
+        assertTrue(farWidth < width)
+        assertTrue(farScale < before.scale)
+        assertWholeOverviewFits(canvas.miniMapProjection!!)
+        mouse(canvas, MouseEvent.MOUSE_DRAGGED, 400, 200, MouseEvent.BUTTON3)
+        val nearWidth = elementWidth(render(canvas))
+        assertTrue(nearWidth > farWidth)
+        assertTrue(canvas.miniMapProjection!!.scale > farScale)
+        mouse(canvas, MouseEvent.MOUSE_DRAGGED, 200, 200, MouseEvent.BUTTON3)
+        assertEquals(width, elementWidth(render(canvas)))
+        assertEquals(before, canvas.miniMapProjection)
+        mouse(canvas, MouseEvent.MOUSE_RELEASED, 200, 200, MouseEvent.BUTTON3)
+        assertEquals(width, elementWidth(render(canvas)))
+        assertSame(original, canvas.diagram)
+        assertEquals(1.0, canvas.zoom)
+    }
+
+    fun testMiniMapContentHasEqualPaddingOnEverySide() {
+        for (visible in listOf(Rectangle(0, 0, 600, 400), Rectangle(120, 90, 420, 300))) {
+            val projection = DiagramMiniMap.layout(listOf(activity(20.0, 40.0)), emptyList(), emptyList(),
+                visible, DiagramPoint(0.0, 0.0))!!
+            val frame = projection.frame
+            val area = projection.contentArea
+            assertEquals(8.0, area.minX - frame.minX)
+            assertEquals(8.0, area.minY - frame.minY)
+            assertEquals(8.0, frame.maxX - area.maxX)
+            assertEquals(8.0, frame.maxY - area.maxY)
+        }
+    }
+
+    fun testPanningMovesMiniMapElementPixelsWithAutomaticScale() {
+        for ((dx, dy) in listOf(40 to 0, -40 to 0, 0 to 40, 0 to -40)) {
+            val canvas = canvas(diagram(activity(200.0, 180.0)))
+            canvas.activityColor = { Color.RED }
+            fun elementCenter(image: BufferedImage): DiagramPoint {
+                val area = canvas.miniMapProjection!!.contentArea.bounds
+                val pixels = mutableListOf<Point>()
+                for (x in area.x until area.x + area.width) for (y in area.y until area.y + area.height) {
+                    val color = Color(image.getRGB(x, y), true)
+                    if (color.red > color.green + 60 && color.red > color.blue + 60) pixels.add(Point(x, y))
+                }
+                assertFalse("The activity must be visible in the minimap", pixels.isEmpty())
+                return DiagramPoint((pixels.minOf { it.x } + pixels.maxOf { it.x }) / 2.0,
+                    (pixels.minOf { it.y } + pixels.maxOf { it.y }) / 2.0)
+            }
+            val start = elementCenter(render(canvas))
+            val before = canvas.miniMapProjection!!
+            mouse(canvas, MouseEvent.MOUSE_PRESSED, 200, 200, MouseEvent.BUTTON3)
+            for (step in 1..3) {
+                mouse(canvas, MouseEvent.MOUSE_DRAGGED, 200 + dx * step, 200 + dy * step, MouseEvent.BUTTON3)
+                val moved = elementCenter(render(canvas))
+                val projection = canvas.miniMapProjection!!
+                val expected = projection.map(canvas.diagram.nodes.first().center)
+                assertEquals(expected.x, moved.x, 1.5)
+                assertEquals(expected.y, moved.y, 1.5)
+                assertWholeOverviewFits(projection)
+                if (dx != 0) assertTrue((moved.x - start.x) * dx > 0)
+                if (dy != 0) assertTrue((moved.y - start.y) * dy > 0)
+            }
+            mouse(canvas, MouseEvent.MOUSE_DRAGGED, 200, 200, MouseEvent.BUTTON3)
+            assertEquals(start, elementCenter(render(canvas)))
+            mouse(canvas, MouseEvent.MOUSE_RELEASED, 200, 200, MouseEvent.BUTTON3)
+            assertEquals(start, elementCenter(render(canvas)))
+        }
+    }
+
+    fun testPanningStartsWithoutChangingMiniMapScaleOrModelPosition() {
+        val canvas = canvas()
+        render(canvas)
+        val before = canvas.miniMapProjection!!
+        mouse(canvas, MouseEvent.MOUSE_PRESSED, 200, 200, MouseEvent.BUTTON3)
+        mouse(canvas, MouseEvent.MOUSE_DRAGGED, 200, 200, MouseEvent.BUTTON3)
+        render(canvas)
+        assertEquals(before, canvas.miniMapProjection)
+        mouse(canvas, MouseEvent.MOUSE_RELEASED, 200, 200, MouseEvent.BUTTON3)
+        render(canvas)
+        assertEquals(before, canvas.miniMapProjection)
+    }
+
+    fun testPanningIndicatorTracksEveryFrameAndReturnsToStart() {
+        for ((dx, dy) in listOf(40 to 0, -40 to 0, 0 to 40, 0 to -40)) {
+            val canvas = canvas()
+            val original = canvas.diagram
+            var renderCalls = 0
+            canvas.activityColor = { renderCalls++; Color.WHITE }
+            render(canvas)
+            val before = canvas.miniMapProjection!!
+            fun indicator(image: BufferedImage): Set<Point> {
+                val area = canvas.miniMapProjection!!.contentArea.bounds
+                return buildSet {
+                    for (x in area.x until area.x + area.width) for (y in area.y until area.y + area.height) {
+                        val color = Color(image.getRGB(x, y), true)
+                        if (color.blue > color.red + 30 && color.blue > color.green + 30) add(Point(x, y))
+                    }
+                }
+            }
+            mouse(canvas, MouseEvent.MOUSE_PRESSED, 200, 200, MouseEvent.BUTTON3)
+            mouse(canvas, MouseEvent.MOUSE_DRAGGED, 200, 200, MouseEvent.BUTTON3)
+            val start = indicator(render(canvas))
+            renderCalls = 0
+            var previous = start
+            for (step in 1..3) {
+                mouse(canvas, MouseEvent.MOUSE_DRAGGED, 200 + dx * step, 200 + dy * step, MouseEvent.BUTTON3)
+                val current = indicator(render(canvas))
+                assertFalse("Indicator must move during panning: $dx,$dy step $step", previous == current)
+                val projection = canvas.miniMapProjection!!
+                assertWholeOverviewFits(projection)
+                assertEquals(before.modelBounds, projection.modelBounds)
+                val viewport = projection.viewport
+                val node = canvas.diagram.nodes.first().location
+                val mapped = projection.map(node)
+                assertEquals((node.x - projection.modelViewport.x) * projection.scale, mapped.x - viewport.x, 0.000001)
+                assertEquals((node.y - projection.modelViewport.y) * projection.scale, mapped.y - viewport.y, 0.000001)
+                assertEquals("Panning must reuse the model and minimap images", 0, renderCalls)
+                previous = current
+            }
+            mouse(canvas, MouseEvent.MOUSE_DRAGGED, 200, 200, MouseEvent.BUTTON3)
+            assertEquals(start, indicator(render(canvas)))
+            mouse(canvas, MouseEvent.MOUSE_RELEASED, 200, 200, MouseEvent.BUTTON3)
+            render(canvas)
+            assertWholeOverviewFits(canvas.miniMapProjection!!)
+            assertSame(original, canvas.diagram)
+        }
+    }
+
     fun testPanningViewportIndicatorStaysVisibleInsideMiniMap() {
         for ((dx, dy) in listOf(2000 to 0, -2000 to 0, 0 to 2000, 0 to -2000)) {
             val canvas = canvas()
             render(canvas)
+            val before = canvas.miniMapProjection!!
             mouse(canvas, MouseEvent.MOUSE_PRESSED, 200, 200, MouseEvent.BUTTON3)
             mouse(canvas, MouseEvent.MOUSE_DRAGGED, 200 + dx, 200 + dy, MouseEvent.BUTTON3)
             val image = render(canvas)
             val area = canvas.miniMapProjection!!.contentArea
+            val far = canvas.miniMapProjection!!
+            assertTrue(far.scale < before.scale)
+            assertWholeOverviewFits(far)
             var bluePixels = 0
             for (x in 0 until image.width) for (y in 0 until image.height) {
                 val color = Color(image.getRGB(x, y), true)

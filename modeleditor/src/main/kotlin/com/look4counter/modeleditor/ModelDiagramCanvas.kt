@@ -139,6 +139,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     private var wireCreationStartPoint: DiagramPoint? = null
     private var wireCreationPoint: DiagramPoint? = null
     private var wireCreationTarget: DiagramNode? = null
+    private var wireCreationPressed = false
     var creationKind: DiagramNodeKind? = null
         private set
     var creationRevision = 0L
@@ -221,9 +222,20 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         ensureGeometryFont()
         navigationSnapshot?.takeIf { it.size == size && it.zoom == zoom }?.miniMap?.let { projection ->
             val visible = visibleRect
-            return projection.copy(modelViewport = Rectangle2D.Double(
+            val viewport = Rectangle2D.Double(
                 (visible.x - origin.x - pan.x) / zoom, (visible.y - origin.y - pan.y) / zoom,
-                visible.width / zoom, visible.height / zoom))
+                visible.width / zoom, visible.height / zoom)
+            if (viewport == projection.modelViewport) return projection
+            val overview = Rectangle2D.Double().apply { setRect(projection.modelBounds); add(viewport) }
+            // Follow half the viewport motion so both the model and viewport remain animated.
+            val centerX = projection.overviewBounds.centerX + (viewport.centerX - projection.modelViewport.centerX) / 2
+            val centerY = projection.overviewBounds.centerY + (viewport.centerY - projection.modelViewport.centerY) / 2
+            val spanX = 2 * maxOf(centerX - overview.minX, overview.maxX - centerX)
+            val spanY = 2 * maxOf(centerY - overview.minY, overview.maxY - centerY)
+            val scale = minOf(0.5, projection.contentArea.width / spanX, projection.contentArea.height / spanY)
+            return projection.copy(modelViewport = viewport, overviewBounds = overview, scale = scale,
+                offsetX = projection.contentArea.centerX - centerX * scale,
+                offsetY = projection.contentArea.centerY - centerY * scale)
         }
         val key = ProjectionKey(sceneRevision, visibleRect, origin + pan, zoom, diagramFont)
         if (projectionKey != key) {
@@ -274,6 +286,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         val navigation = object : MouseAdapter() {
             override fun mousePressed(event: MouseEvent) {
                 suppressEditClick = false
+                wireCreationPressed = false
                 traceCreationMouse(event)
                 if (SwingUtilities.isLeftMouseButton(event) && miniMapProjection?.frame?.contains(event.point) == true) {
                     val projection = miniMapProjection!!
@@ -290,6 +303,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     return
                 }
                 if (wireCreationMode && SwingUtilities.isLeftMouseButton(event)) {
+                    wireCreationPressed = event.clickCount <= 1
                     updateWireCreation(event.point)
                     requestFocusInWindow()
                     repaint()
@@ -411,23 +425,8 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                 if (wireCreationMode) {
                     onCreationTrace?.invoke("ROUTE input=$lastCreationInputId target=wire_creation")
                     if (event.clickCount != 1) return
-                    val target = nodeAt(event.point, includeStateBoundary = true)
-                    if (target != null) {
-                        val start = wireCreationStart
-                        if (start == null) {
-                            gestureSelection = selectedNodes; gestureWire = selectedWire; gesturePan = pan
-                            wireCreationStart = target; wireCreationStartPoint = modelPoint(event.point)
-                            selection.clear(); selection.add(target); selectedWire = null
-                            onMoveStarted?.invoke()
-                        } else if (start.id != target.id || start.kind != target.kind) {
-                            val draft = draftWire(start, target, wireCreationStartPoint ?: start.center, modelPoint(event.point))
-                            onWireCreateRequested?.invoke(draft)
-                            wireCreationStart = null; wireCreationStartPoint = null
-                        }
-                    }
-                    updateWireCreation(event.point)
-                    cursor = Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)
-                    repaint(); event.consume(); return
+                    selectWireCreationPoint(event.point)
+                    event.consume(); return
                 }
                 val kind = creationKind
                 if (kind != null) {
@@ -567,6 +566,15 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     navigateMiniMap(event.point, projection)
                     miniMapDrag = null
                     repaint()
+                    event.consume()
+                    return
+                }
+                if (wireCreationMode && previous == null && SwingUtilities.isLeftMouseButton(event)) {
+                    val pressed = wireCreationPressed
+                    wireCreationPressed = false
+                    suppressEditClick = true
+                    if (pressed) selectWireCreationPoint(event.point)
+                    suppressEditClick = true
                     event.consume()
                     return
                 }
@@ -882,6 +890,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         if (isDragging) cancelDrag()
         if (enabled && creationKind != null) setCreationKind(null)
         wireCreationMode = enabled
+        wireCreationPressed = false
         wireCreationStart = null; wireCreationStartPoint = null; wireCreationPoint = null; wireCreationTarget = null
         cursor = Cursor.getPredefinedCursor(if (enabled) Cursor.CROSSHAIR_CURSOR else Cursor.DEFAULT_CURSOR)
         onWireCreationModeChanged?.invoke(enabled)
@@ -891,6 +900,28 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     private fun updateWireCreation(point: Point) {
         wireCreationPoint = modelPoint(point)
         wireCreationTarget = nodeAt(point, includeStateBoundary = true)
+    }
+
+    private fun selectWireCreationPoint(point: Point) {
+        if (!wireCreationMode || !canMoveNodes() || diagram.message != null ||
+            !visibleRect.contains(point) || miniMapProjection?.frame?.contains(point) == true) return
+        val target = nodeAt(point, includeStateBoundary = true)
+        if (target != null) {
+            val start = wireCreationStart
+            if (start == null) {
+                gestureSelection = selectedNodes; gestureWire = selectedWire; gesturePan = pan
+                wireCreationStart = target; wireCreationStartPoint = modelPoint(point)
+                selection.clear(); selection.add(target); selectedWire = null
+                onMoveStarted?.invoke()
+            } else if (start.id != target.id || start.kind != target.kind) {
+                val draft = draftWire(start, target, wireCreationStartPoint ?: start.center, modelPoint(point))
+                onWireCreateRequested?.invoke(draft)
+                wireCreationStart = null; wireCreationStartPoint = null
+            }
+        }
+        updateWireCreation(point)
+        cursor = Cursor.getPredefinedCursor(Cursor.CROSSHAIR_CURSOR)
+        repaint()
     }
 
     private fun draftWire(start: DiagramNode, end: DiagramNode, from: DiagramPoint, to: DiagramPoint,
@@ -913,6 +944,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     }
 
     private fun clearGesture() {
+        wireCreationPressed = false
         clearNavigationSnapshot()
         navigationSnapshotAttempted = false
         orthogonalSnap.reset()
@@ -1388,6 +1420,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     private fun clearNavigationSnapshot() {
         navigationSnapshot?.image?.flush()
         navigationSnapshot = null
+        projectionKey = null
     }
 
     private fun prepareNavigationSnapshot() {
@@ -1420,6 +1453,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         } finally { g.dispose() }
         navigationSnapshot = NavigationSnapshot(image, area, origin + pan, zoom, Dimension(size), diagramFont,
             background.rgb, foreground.rgb, miniMapProjection)
+        projectionKey = null
     }
 
     private fun drawAlignmentGuide(g: Graphics2D, guide: AlignmentGuide) {
@@ -1458,6 +1492,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
 
     private fun drawMiniMap(graphics: Graphics2D) {
         val projection = miniMapProjection ?: return
+        val imageProjection = navigationSnapshot?.miniMap ?: projection
         val g = graphics.create() as Graphics2D
         try {
             val frame = projection.frame
@@ -1470,7 +1505,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             g.drawRoundRect(frame.x, frame.y, frame.width, frame.height, 8, 8)
             val deviceX = kotlin.math.hypot(graphics.transform.scaleX, graphics.transform.shearY).coerceAtLeast(1.0)
             val deviceY = kotlin.math.hypot(graphics.transform.scaleY, graphics.transform.shearX).coerceAtLeast(1.0)
-            val imageKey = MiniMapImageKey(projection.scale, projection.offsetX - frame.x, projection.offsetY - frame.y,
+            val imageKey = MiniMapImageKey(imageProjection.scale, imageProjection.offsetX - frame.x, imageProjection.offsetY - frame.y,
                 frame.width, frame.height, deviceX, deviceY, appearanceRevision,
                 diagramFont, background.rgb, foreground.rgb)
             val recreate = miniMapImageKey != imageKey || miniMapImage == null
@@ -1485,7 +1520,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     imageGraphics.scale(deviceX, deviceY)
                     imageGraphics.translate(-frame.x, -frame.y)
                     if (!recreate) {
-                        val dirty = projection.map(miniMapDirty!!).bounds.apply { grow(1, 1) }
+                        val dirty = imageProjection.map(miniMapDirty!!).bounds.apply { grow(1, 1) }
                         imageGraphics.clip(dirty)
                         imageGraphics.composite = AlphaComposite.Clear
                         imageGraphics.fillRect(frame.x, frame.y, frame.width, frame.height)
@@ -1494,10 +1529,10 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     imageGraphics.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON)
                     imageGraphics.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON)
                     imageGraphics.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.78f)
-                    imageGraphics.clip(projection.contentArea)
-                    imageGraphics.translate(projection.offsetX, projection.offsetY)
-                    imageGraphics.scale(projection.scale, projection.scale)
-                    imageGraphics.stroke = BasicStroke((1.0 / projection.scale).toFloat())
+                    imageGraphics.clip(imageProjection.contentArea)
+                    imageGraphics.translate(imageProjection.offsetX, imageProjection.offsetY)
+                    imageGraphics.scale(imageProjection.scale, imageProjection.scale)
+                    imageGraphics.stroke = BasicStroke((1.0 / imageProjection.scale).toFloat())
                     drawMiniMapModel(imageGraphics)
                 } finally { imageGraphics.dispose() }
                 miniMapDirty = null
@@ -1506,7 +1541,16 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             val originalClip = g.clip
             g.clip(projection.contentArea)
             g.composite = AlphaComposite.SrcOver
-            g.drawImage(miniMapImage, frame.x, frame.y, frame.width, frame.height, null)
+            val imageGraphics = g.create() as Graphics2D
+            try {
+                if (projection !== imageProjection) {
+                    imageGraphics.translate(projection.offsetX, projection.offsetY)
+                    val ratio = projection.scale / imageProjection.scale
+                    imageGraphics.scale(ratio, ratio)
+                    imageGraphics.translate(-imageProjection.offsetX, -imageProjection.offsetY)
+                }
+                imageGraphics.drawImage(miniMapImage, frame.x, frame.y, frame.width, frame.height, null)
+            } finally { imageGraphics.dispose() }
             g.composite = AlphaComposite.getInstance(AlphaComposite.SRC_OVER, 0.78f)
             g.color = JBColor.BLUE
             g.stroke = BasicStroke(1.2f)
@@ -1517,12 +1561,11 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             }
             val area = projection.contentArea
             val viewport = projection.viewport
-            val indicatorWidth = minOf(viewport.width, area.width - 2.0)
-            val indicatorHeight = minOf(viewport.height, area.height - 2.0)
-            g.draw(Rectangle2D.Double(
-                viewport.x.coerceIn(area.minX + 1.0, area.maxX - 1.0 - indicatorWidth),
-                viewport.y.coerceIn(area.minY + 1.0, area.maxY - 1.0 - indicatorHeight),
-                indicatorWidth, indicatorHeight))
+            val left = viewport.minX.coerceIn(area.minX + 1.0, area.maxX - 3.0)
+            val top = viewport.minY.coerceIn(area.minY + 1.0, area.maxY - 3.0)
+            val right = viewport.maxX.coerceIn(left + 2.0, area.maxX - 1.0)
+            val bottom = viewport.maxY.coerceIn(top + 2.0, area.maxY - 1.0)
+            g.draw(Rectangle2D.Double(left, top, right - left, bottom - top))
         } finally {
             g.dispose()
         }

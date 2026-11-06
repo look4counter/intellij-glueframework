@@ -15,6 +15,7 @@ import java.awt.Component
 import java.awt.Container
 import javax.swing.JList
 import javax.swing.JTextField
+import com.intellij.ui.EditorTextField
 
 class QueryTabNavigationTest : BasePlatformTestCase() {
     private val xml = """
@@ -46,6 +47,11 @@ class QueryTabNavigationTest : BasePlatformTestCase() {
     }
 
     private fun drain() = UIUtil.dispatchAllInvocationEvents()
+    private fun sql(views: Views): EditorTextField = descendants(views.design.component)
+        .filterIsInstance<EditorTextField>().single { it.name == "query.sql" }.also {
+            it.ensureWillComputePreferredSize()
+            it.preferredSize
+        }
     private fun toSource(views: Views) {
         views.design.deselectNotify()
         views.source.selectNotify()
@@ -61,7 +67,10 @@ class QueryTabNavigationTest : BasePlatformTestCase() {
         val manager = PsiDocumentManager.getInstance(project)
         manager.commitDocument(views.source.editor.document)
         return (manager.getPsiFile(views.source.editor.document) as XmlFile).rootTag!!.subTags
-            .filter { it.localName == "query" }.map { it.textRange.startOffset }
+            .filter { it.localName == "query" }.map { tag ->
+                tag.value.textElements.firstOrNull()?.let { it.textRange.startOffset + it.displayToPhysical(0) }
+                    ?: tag.textRange.startOffset
+            }
     }
 
     fun testDesignSelectionMovesSourceCaretAndRoundTripUsesCurrentQuery() {
@@ -74,7 +83,7 @@ class QueryTabNavigationTest : BasePlatformTestCase() {
         toDesign(views, original.indexOf("select 3") + 3)
         assertEquals(2, views.list.selectedIndex)
         toSource(views)
-        assertEquals(queryStarts(views)[2], views.source.editor.caretModel.offset)
+        assertEquals(original.indexOf("select 3") + 3, views.source.editor.caretModel.offset)
         assertEquals(original, views.source.editor.document.text)
     }
 
@@ -176,5 +185,92 @@ class QueryTabNavigationTest : BasePlatformTestCase() {
             Disposer.dispose(views.source)
         }
         drain()
+    }
+
+    fun testSqlCharacterOffsetsRoundTripAcrossCdataEntitiesAndSplitText() {
+        for ((body, expectedSql) in listOf(
+            "<![CDATA[select 한글\nfrom items where name = 'tail']] >".replace("]] >", "]]>") to "select 한글\nfrom items where name = 'tail'",
+            "select a &lt; b and x = &amp;tail" to "select a < b and x = &tail",
+            "<![CDATA[select ]]]]><![CDATA[> tail]]>" to "select ]]> tail",
+            "select &#xD55C;&#xAE00; tail" to "select 한글 tail"
+        )) {
+            val views = open("<queryMap><query id=\"a\">$body</query></queryMap>")
+            val field = sql(views)
+            val sourceOffset = views.source.editor.document.text.indexOf("tail") + 2
+            toDesign(views, sourceOffset)
+            assertEquals(expectedSql, field.text)
+            assertEquals(expectedSql.indexOf("tail") + 2, field.editor!!.caretModel.offset)
+            repeat(3) {
+                toSource(views)
+                assertEquals(sourceOffset, views.source.editor.caretModel.offset)
+                toDesign(views, sourceOffset)
+                assertEquals(expectedSql.indexOf("tail") + 2, field.editor!!.caretModel.offset)
+            }
+        }
+    }
+
+    fun testDesignEntityAndEndOffsetsMapToSourceCharacters() {
+        val views = open("<queryMap><query id=\"a\">select a &lt; b &amp; c</query></queryMap>")
+        val field = sql(views)
+        for (offset in listOf(field.text.indexOf('<'), field.text.indexOf('&'), field.text.length)) {
+            field.editor!!.caretModel.moveToOffset(offset)
+            toSource(views)
+            val sourceOffset = views.source.editor.caretModel.offset
+            if (offset < field.text.length) {
+                val entity = if (field.text[offset] == '<') "&lt;" else "&amp;"
+                assertTrue(views.source.editor.document.text.substring(sourceOffset).startsWith(entity))
+            }
+            toDesign(views, sourceOffset)
+            assertEquals(offset, field.editor!!.caretModel.offset)
+        }
+    }
+
+    fun testPendingSqlEditsUseLatestCdataAndPreserveCaret() {
+        val views = open()
+        val field = sql(views)
+        val edited = "select 한글\nfrom items where x = 'tail' and y = ']]>'"
+        WriteCommandAction.runWriteCommandAction(project) { field.document.setText(edited) }
+        val offset = edited.indexOf("tail") + 2
+        field.editor!!.caretModel.moveToOffset(offset)
+        toSource(views)
+        val sourceOffset = views.source.editor.document.text.indexOf("tail") + 2
+        assertEquals(sourceOffset, views.source.editor.caretModel.offset)
+        toDesign(views, sourceOffset)
+        assertEquals(offset, field.editor!!.caretModel.offset)
+        drain()
+        assertEquals(offset, field.editor!!.caretModel.offset)
+    }
+
+    fun testQuerySpecificCaretsAndNonSqlSourceLocationsArePreserved() {
+        val views = open()
+        val field = sql(views)
+        field.editor!!.caretModel.moveToOffset(3)
+        views.list.selectedIndex = 1
+        drain()
+        field.editor!!.caretModel.moveToOffset(6)
+        views.list.selectedIndex = 0
+        drain()
+        assertEquals(3, field.editor!!.caretModel.offset)
+        toDesign(views, views.source.editor.document.text.indexOf("second"))
+        assertEquals(6, field.editor!!.caretModel.offset)
+        val original = views.source.editor.document.text
+        toSource(views)
+        assertEquals(original.indexOf("select 2") + 6, views.source.editor.caretModel.offset)
+        assertEquals(original, views.source.editor.document.text)
+    }
+
+    fun testUncommittedSourceSqlRefreshRestoresMappedCharacterInsteadOfEnd() {
+        val views = open()
+        val field = sql(views)
+        field.editor!!.caretModel.moveToOffset(2)
+        WriteCommandAction.runWriteCommandAction(project) {
+            views.source.editor.document.setText(xml.replace("select 1", "select a_longer_value from items"))
+        }
+        val offset = views.source.editor.document.text.indexOf("longer") + 3
+        toDesign(views, offset)
+        assertEquals(field.text.indexOf("longer") + 3, field.editor!!.caretModel.offset)
+        drain()
+        toSource(views)
+        assertEquals(offset, views.source.editor.caretModel.offset)
     }
 }

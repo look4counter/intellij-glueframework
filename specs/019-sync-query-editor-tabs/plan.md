@@ -40,3 +40,11 @@
 ## 복잡성
 
 프로젝트 서비스나 이벤트 버스를 추가하지 않고 문서 수명에 연결된 두 개의 키를 사용한다. 기존 파일 형식과 외부 탐색 계약을 유지한다.
+
+## SQL 글자 위치 보존 계획
+
+이 절이 Source 목적지를 항상 여는 태그 시작으로 정한 이전 설계를 대체한다. QueryTabNavigation에서 XmlText.physicalToDisplay와 displayToPhysical로 원문·SQL 위치를 대응시킨다. 여러 XmlText의 표시 길이를 누적하며 SQL 외부 위치는 null로 처리한다. Design의 선택 포인터와 SQL 오프셋을 공유 문서에 게시하고 Source는 최신 PSI의 같은 요소에만 적용한다.
+
+QueryDesignEditor의 SqlBuffer에 마지막 커서 오프셋을 저장한다. refresh 전에 현재 위치를 보관하고 setText 및 문서 교체 후 범위 내로 복원한다. Source에서 받은 본문 위치가 있으면 갱신 후 해당 위치로 이동하고 화면에 표시한다. 비동기 수명 검사와 외부 탐색 우선순위는 유지한다.
+
+Kotlin·IntelliJ 플랫폼 기존 API만 사용하며 저장 형식이나 의존성은 바꾸지 않는다. 헌장은 미작성 템플릿이고 설계 전후 추가 위반은 없다. QueryTabNavigationTest의 기존 목적지 기대값을 SQL 시작 기준으로 갱신하고 양방향 본문·엔티티·분할 CDATA·미반영 수정·반복 갱신·쿼리별 위치를 검증한다. QueryDesignEditorTest와 기존 탭 회귀 검증을 직접 컴파일·JUnitCore로 실행한다.

@@ -117,7 +117,8 @@ internal class QueryDesignEditor(private val project: Project, private val file:
     private var tabRevision = 0L
     private var notice: String? = null
 
-    private data class SqlBuffer(val target: SmartPsiElementPointer<XmlTag>, val document: Document, var original: String)
+    private data class SqlBuffer(val target: SmartPsiElementPointer<XmlTag>, val document: Document,
+                                 var original: String, var caretOffset: Int = 0)
 
     init {
         sqlEditor.setDisposedWith(this)
@@ -310,6 +311,7 @@ internal class QueryDesignEditor(private val project: Project, private val file:
 
     private fun refresh(preferred: SmartPsiElementPointer<XmlTag>? = selected?.target) {
         if (disposed || project.isDisposed || !file.isValid) return
+        rememberSqlCaret()
         PsiDocumentManager.getInstance(project).commitDocument(model.document)
         val snapshot = model.snapshot()
         val oldIndex = queryList.selectedIndex.coerceAtLeast(0)
@@ -364,6 +366,7 @@ internal class QueryDesignEditor(private val project: Project, private val file:
                     }
                 }
                 if (sqlEditor.document !== buffer.document) sqlEditor.document = buffer.document
+                moveSqlCaret(buffer.caretOffset)
             }
             sqlEditor.setViewer(!editable || !query.sqlEditable)
             status.text = snapshot.problem ?: notice ?: when {
@@ -459,15 +462,35 @@ internal class QueryDesignEditor(private val project: Project, private val file:
             val queries = model.snapshot().queries
             val preferred = queries.firstOrNull { it.target.element == tag } ?: queries.firstOrNull()
             refresh(preferred?.target)
+            if (tag != null && selected?.target?.element == tag) {
+                QueryTabNavigation.sqlOffset(tag, offset)?.let(::moveSqlCaret)
+            }
             if (queryList.selectedIndex >= 0) queryList.ensureIndexIsVisible(queryList.selectedIndex)
         }
     }
     override fun deselectNotify() {
         val revision = ++tabRevision
+        rememberSqlCaret()
         QueryTabNavigation.whenWriteSafe(project, file, { !disposed && revision == tabRevision }) {
             flushPending()
             refresh()
+            val query = selected
+            val buffer = buffers.firstOrNull { it.document === sqlEditor.document }
+            model.document.putUserData(QueryTabNavigation.designCaret,
+                if (query != null && buffer != null) QueryTabNavigation.SqlCaret(query.target, buffer.caretOffset) else null)
         }
+    }
+
+    private fun rememberSqlCaret() {
+        val offset = sqlEditor.editor?.takeUnless { it.isDisposed }?.caretModel?.offset ?: return
+        buffers.firstOrNull { it.document === sqlEditor.document }?.caretOffset = offset
+    }
+
+    private fun moveSqlCaret(offset: Int) {
+        val position = offset.coerceIn(0, sqlEditor.document.textLength)
+        buffers.firstOrNull { it.document === sqlEditor.document }?.caretOffset = position
+        sqlEditor.setCaretPosition(position)
+        sqlEditor.editor?.scrollingModel?.scrollToCaret(com.intellij.openapi.editor.ScrollType.MAKE_VISIBLE)
     }
     override fun isModified(): Boolean = FileDocumentManager.getInstance().isDocumentUnsaved(model.document)
     override fun isValid(): Boolean = file.isValid

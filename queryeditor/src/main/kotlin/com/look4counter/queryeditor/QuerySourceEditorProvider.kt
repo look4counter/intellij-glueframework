@@ -55,7 +55,10 @@ private class QuerySourceEditor(private val project: Project, private val source
                 val queries = QueryMapDocumentModel(project, sourceFile).snapshot().queries
                 val selected = document.getUserData(QueryTabNavigation.designQuery)?.element
                 val query = queries.firstOrNull { it.target.element == selected } ?: queries.firstOrNull()
-                val offset = query?.target?.element?.textRange?.startOffset ?: return@whenWriteSafe
+                val tag = query?.target?.element ?: return@whenWriteSafe
+                val caret = document.getUserData(QueryTabNavigation.designCaret)
+                val sqlOffset = caret?.takeIf { it.target.element == tag }?.offset ?: 0
+                val offset = QueryTabNavigation.sourceOffset(tag, sqlOffset)
                 editor.caretModel.removeSecondaryCarets()
                 editor.selectionModel.removeSelection()
                 editor.caretModel.moveToOffset(offset)

@@ -42,7 +42,7 @@ object DiagramMiniMap {
         val width = minOf(200, maxOf(96, visible.width / 3))
         val height = minOf(140, maxOf(72, visible.height / 3))
         val frame = Rectangle(visible.x + visible.width - width - 12, visible.y + 12, width, height)
-        val content = Rectangle2D.Double(frame.x + 8.0, frame.y + 24.0, width - 16.0, height - 32.0)
+        val content = Rectangle2D.Double(frame.x + 8.0, frame.y + 8.0, width - 16.0, height - 16.0)
         val viewport = Rectangle2D.Double((visible.x - translation.x) / zoom, (visible.y - translation.y) / zoom,
             visible.width / zoom, visible.height / zoom)
         val overview = Rectangle2D.Double().apply { setRect(bounds); add(viewport) }

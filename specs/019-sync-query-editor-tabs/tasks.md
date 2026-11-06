@@ -31,3 +31,11 @@
 ## 의존성과 실행 전략
 
 T001 → T002 → T003 → T004 → T005 → T006 → T007 → T008 → T009 순서로 진행한다. 이야기 1의 Source 이동을 최소 단위로 검증하고 이야기 2를 통합한다. 두 이야기는 동일 파일과 테스트 기반을 공유하므로 순차 진행한다. 검증 대상 클래스별 실행은 독립적이지만 이번에는 하나의 Gradle 실행으로 묶는다.
+
+## 6단계: SQL 글자 위치 양방향 보존
+
+- [x] T010 [US2] src/test/kotlin/com/look4counter/QueryTabNavigationTest.kt에 양방향 본문·엔티티·분할 CDATA·미반영 수정·쿼리별 위치 복원 회귀 검증을 추가한다. FR-006~008, SC-003~004.
+- [x] T011 [US2] queryeditor/src/main/kotlin/com/look4counter/queryeditor/QueryTabNavigation.kt에 물리·표시 오프셋 변환과 Design 커서 전달 상태를 추가하고 QueryDesignEditor.kt·QuerySourceEditorProvider.kt에서 적용한다. FR-006~008.
+- [x] T012 관련 회귀 테스트와 수렴 점검을 수행하고 specs/019-sync-query-editor-tabs/quickstart.md에 결과 및 빌드 제약을 기록한다.
+
+의존성: T010 → T011 → T012. 같은 공유 상태와 UI 경로이므로 순차 진행한다. 최소 범위는 양방향 SQL 글자 위치이며 독립 검증은 같은 SQL 글자를 왕복해도 커서가 유지되는 것이다. 병렬 작업은 없다.
