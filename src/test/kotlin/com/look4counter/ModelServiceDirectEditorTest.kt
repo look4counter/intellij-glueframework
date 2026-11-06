@@ -15,6 +15,31 @@ import com.look4counter.modeleditor.*
 import javax.swing.JScrollPane
 
 class ModelServiceDirectEditorTest : BasePlatformTestCase() {
+    fun testPendingChangeQueriesReuseComparisonUntilViewChanges() {
+        val file = myFixture.addFileToProject("cached-service.xml", xml()).virtualFile
+        val adapter = ServiceDiagramAdapter(project, file)
+        val view = adapter.read(source(file))
+        val child = view.rootTag!!.subTags.first { it.localName == "child" && it.getAttributeValue("name") == "Router" }
+        WriteCommandAction.runWriteCommandAction(project) { DiagramXmlText.write(child, "name", "Changed") }
+        adapter.markPendingChanges()
+        val changed = adapter.changeHighlights()
+        assertFalse(changed.isEmpty)
+        repeat(100) {
+            assertTrue(adapter.hasPendingChanges())
+            assertSame(changed, adapter.changeHighlights())
+        }
+        WriteCommandAction.runWriteCommandAction(project) { DiagramXmlText.write(child, "name", "Router") }
+        val restored = adapter.changeHighlights()
+        assertNotSame(changed, restored)
+        assertTrue(restored.isEmpty)
+        assertFalse(adapter.hasPendingChanges())
+        WriteCommandAction.runWriteCommandAction(project) { DiagramXmlText.write(child, "name", "Changed again") }
+        assertTrue(adapter.hasPendingChanges())
+        adapter.rollback()
+        assertFalse(adapter.hasPendingChanges())
+        assertTrue(adapter.changeHighlights().isEmpty)
+    }
+
     private lateinit var previous: ModelEditorState
     override fun setUp() {
         super.setUp()

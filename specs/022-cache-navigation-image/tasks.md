@@ -1,4 +1,4 @@
-﻿# 실행 작업: 화면 이동 이미지 재사용
+# 실행 작업: 화면 이동 이미지 재사용
 
 ## 1단계: 준비
 
@@ -49,3 +49,11 @@ T001 → T002 → T003 → T004 → T005 순으로 진행한다. 같은 캔버�
 의존성: T011 → T012 → T013. 명세의 모호성은 없고 요구사항과 계획·작업의 대응을 확인했다.
 
 
+
+## 8단계: 패닝 중 상태 조회 비용 개선
+
+- [x] T014 [US1] src/test/kotlin/com/look4counter/ModelServiceDirectEditorTest.kt와 src/test/kotlin/com/look4counter/ModelDiagramClipboardTest.kt에 반복 조회 재사용·수정 무효화·패닝 중 붙여넣기 제한 회귀 검증을 추가한다. FR-009~010, SC-007~008.
+- [x] T015 [US1] modeleditor/src/main/kotlin/com/look4counter/modeleditor/ServiceDiagramAdapter.kt에 변경 비교 캐시와 수명 관리를 구현하고 ModelDesignEditorProvider.kt의 붙여넣기 가능 여부에 드래그 검사를 추가한다. FR-009~010.
+- [x] T016 관련 서비스·클립보드·캔버스 테스트와 buildPlugin을 실행하고 specs/022-cache-navigation-image/quickstart.md에 검증 및 수렴 결과를 기록한다.
+
+의존성: T014 → T015 → T016. 새 작업 3개는 사용자 이야기 1에 속한다. 두 테스트 파일의 작성은 병렬 가능하지만 동일한 검증 흐름으로 순차 진행한다. 독립 검증은 동일 편집본 100회 조회, 수정 및 원복, 패닝 시작·종료의 붙여넣기 상태이다.

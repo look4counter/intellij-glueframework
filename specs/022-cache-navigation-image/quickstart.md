@@ -29,3 +29,20 @@ FinalState는 바깥 원 중심이 (x+10, y+10)이며, 안쪽 원 중심도 (x+2
 2026-11-06: 이전 구현에서 내부 원 중심 약 29.995와 외부 윤곽 중심 약 30.513의 차이로 재현 테스트가 실패했다. 종료 상태에만 순수 윤곽 좌표를 적용한 뒤 기본·1.5·2배 배율의 두 원 중심 차이 0.2 장치 픽셀 이내 검증이 통과했다. 그래픽 복제본을 사용해 다른 도형의 렌더링 설정을 보존한다.
 
 성능 13개·미니맵 12개·확대 4개로 총 29개 테스트와 buildPlugin이 통과했다. 수렴 점검에서 FR-008, SC-006, 렌더링 설정 복원 및 기존 요구사항과의 일관성을 확인했으며 추가 작업은 없다. 실제 스크린샷에서 내부 원은 상대적으로 왼쪽 위에 보이는 현상이며 이전 방향 설명을 정정했다.
+
+## 주기적 상태 조회 검증 결과
+
+2026-11-06: 추가한 회귀 테스트 두 개는 수정 전 각각 비교 결과 재사용 실패와 패닝 중 붙여넣기 가능 상태로 실패했다. 기존 29개는 통과했다. 수정 후 서비스·클립보드 31개가 모두 통과했다. 이어 성능·미니맵·확대·서비스 배치까지 합쳐 66개가 모두 통과했다.
+
+현재 환경에는 이전 안내의 Gradle 경로와 오프라인 저장소가 없다. 작업 폴더의 Gradle 저장소에는 IntelliJ 배포 ZIP이 없어 Gradle test와 buildPlugin이 의존성 해석 단계에서 실패했다. 기존에 추출된 IntelliJ 2025.3.6.1의 JBR과 라이브러리, 저장된 컴파일·JUnit 인자를 재사용하여 모델 편집기 전체 소스 및 관련 테스트를 Kotlin 컴파일러로 직접 컴파일하고 JUnitCore로 실행했다. 컴파일은 성공했고 플러그인 ZIP은 새로 생성하지 못했다.
+
+검증 재실행 명령은 아래와 같다. 인자 파일은 작업 폴더의 무시되는 검증 디렉터리에 있다.
+
+```powershell
+$runtime = 'C:/Users/tcpip147/.gradle/caches/9.7.1/transforms/41d2ee0b381ac1ce59d15aa3eb4932b1/transformed/idea-2025.3.6.1-win/jbr/bin/java.exe'
+$compileLines = Get-Content .gradle-validation/panning-compile.args
+& $runtime -cp $compileLines[5].Trim('"') org.jetbrains.kotlin.cli.jvm.K2JVMCompiler '@.gradle-validation/panning-compile.args'
+& $runtime '@.gradle-validation/panning-regression.args'
+```
+
+같은 편집본 100회 조회의 비교 객체 재사용, XML 변경·원복 후 갱신, 롤백 후 보류 상태 해제, 패닝 중 붙여넣기 가능 여부 제한 및 종료 후 붙여넣기 복귀를 확인했다. 실제 IDE의 주기적인 끊김이 해소되는지는 설치 후 추가 관찰이 필요하다.

@@ -26,24 +26,32 @@ class ServiceDiagramAdapter(private val project: Project, private val file: Virt
     private var original: XmlFile? = null
     private var pendingChanges = false
     private var committedDiagram: ModelDiagram? = null
+    private data class HighlightCache(val view: XmlFile, val stamp: Long, val baseline: ModelDiagram,
+                                      val highlights: DiagramChangeHighlights)
+    private var highlightCache: HighlightCache? = null
     private val activities = mutableMapOf<String, XmlTag>()
     private val transitions = mutableMapOf<String, XmlTag>()
     private val properties = IdentityHashMap<XmlTag, XmlTag>()
     private fun XmlTag.serviceChildren(name: String) = subTags.filter { it.localName == name && it.namespace == SERVICE_NAMESPACE }
     private fun stamp() = FileDocumentManager.getInstance().getDocument(file)?.modificationStamp ?: -1L
-    fun invalidate() { if (!pendingChanges) projected = null }
+    fun invalidate() { if (!pendingChanges) { projected = null; highlightCache = null } }
     fun hasPendingChanges() = pendingChanges && !changeHighlights().isEmpty
-    fun markPendingChanges() { pendingChanges = true }
+    fun markPendingChanges() { pendingChanges = true; highlightCache = null }
     fun pendingView(): XmlFile? = projected
     fun rollback() {
         pendingChanges = false
         projected = null
+        highlightCache = null
     }
 
     fun changeHighlights(): DiagramChangeHighlights {
         if (!pendingChanges) return DiagramChangeHighlights()
         val baseline = committedDiagram ?: return DiagramChangeHighlights()
-        val current = projected?.let(ModelDiagramParser::parse) ?: return DiagramChangeHighlights()
+        val view = projected ?: return DiagramChangeHighlights()
+        val viewStamp = view.modificationStamp
+        highlightCache?.takeIf { it.view === view && it.stamp == viewStamp && it.baseline === baseline }
+            ?.let { return it.highlights }
+        val current = ModelDiagramParser.parse(view)
         val beforeNodes = baseline.nodes.associateBy { it.id }
         val afterNodes = current.nodes.associateBy { it.id }
         val nodeChanges = linkedMapOf<String, DiagramChangeKind>()
@@ -71,10 +79,12 @@ class ServiceDiagramAdapter(private val project: Project, private val file: Virt
             }
         }
         beforeWires.keys.filter { it !in afterWires }.forEach { wireChanges[it] = DiagramChangeKind.Removed }
-        return DiagramChangeHighlights(nodeChanges, wireChanges,
+        val highlights = DiagramChangeHighlights(nodeChanges, wireChanges,
             baseline.nodes.filter { nodeChanges[it.id] == DiagramChangeKind.Removed },
             baseline.wires.filter { wireChanges[it.id] == DiagramChangeKind.Removed },
             baseline.properties != current.properties)
+        highlightCache = HighlightCache(view, viewStamp, baseline, highlights)
+        return highlights
     }
 
     fun read(source: XmlFile): XmlFile {
@@ -157,6 +167,7 @@ class ServiceDiagramAdapter(private val project: Project, private val file: Virt
         transitions.clear(); transitions.putAll(sourceTransitions)
         original = source
         projected = xml
+        highlightCache = null
         stamp = stamp()
         pendingChanges = false
         committedDiagram = ModelDiagramParser.parse(xml)
@@ -270,5 +281,6 @@ class ServiceDiagramAdapter(private val project: Project, private val file: Virt
         stamp = stamp()
         pendingChanges = false
         projected = null
+        highlightCache = null
     }
 }

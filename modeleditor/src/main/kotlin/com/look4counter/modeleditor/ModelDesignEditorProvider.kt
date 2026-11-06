@@ -147,7 +147,8 @@ private class ModelDesignEditor(private val project: Project, private val file: 
         }
         canvas.pasteProvider = object : PasteProvider {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
-            override fun isPastePossible(context: DataContext) = DiagramClipboard.read()?.children?.isNotEmpty() == true
+            override fun isPastePossible(context: DataContext) = !disposed && !canvas.isDragging &&
+                DiagramClipboard.read()?.children?.isNotEmpty() == true
             override fun isPasteEnabled(context: DataContext) = !disposed && !scheduled && !canvas.isDragging && canvas.creationKind == null && !canvas.wireCreationMode &&
                 canEditStructure() && isPastePossible(context)
             override fun performPaste(context: DataContext) {

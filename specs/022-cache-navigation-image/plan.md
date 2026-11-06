@@ -34,3 +34,9 @@ ModelDiagramCanvas.drawNode의 FinalState 안쪽 원 지름 15를 유지하면�
 ## 종료 상태 픽셀 정렬 계획
 
 ModelDiagramCanvas.drawNode의 FinalState 렌더링에 한해 KEY_STROKE_CONTROL의 VALUE_STROKE_PURE를 적용하여 윤곽과 채움이 동일한 기하 좌표를 사용하게 한다. 기존 그래픽 상태는 복원한다. ModelDiagramPerformanceTest에 실제 픽셀의 내부 원·외부 원 중심을 비교하는 회귀 검증을 추가해 수정 전 재현을 확인한다. 외부 라이브러리나 API 변경은 없다.
+
+## 주기적 상태 조회 개선 계획
+
+ServiceDiagramAdapter.changeHighlights에서 편집본 객체·수정 시각·기준 모델 객체를 키로 마지막 비교 결과 하나를 재사용한다. 내용이 바뀌면 재계산하고 markPendingChanges·새 투영 생성·롤백·적용 시 참조를 해제한다. hasPendingChanges와 Commit/Rollback 도구 모음 및 isModified가 같은 결과를 공유한다. ModelDesignEditorProvider의 isPastePossible은 드래그 상태를 먼저 검사하여 클립보드 읽기를 생략한다.
+
+검증: src/test/kotlin/com/look4counter/ModelServiceDirectEditorTest.kt에서 반복 조회의 결과 객체 동일성과 수정 후 새 결과, 원복·롤백의 정확성을 확인한다. src/test/kotlin/com/look4counter/ModelDiagramClipboardTest.kt에서 패닝 중 붙여넣기 조회 및 종료 후 복귀를 검증한다. 기존 성능·서비스·클립보드 테스트와 buildPlugin을 실행한다. 의존성과 외부 API 추가는 없으며 헌장 점검 결과는 동일하다.

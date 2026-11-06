@@ -27,6 +27,24 @@ import java.awt.event.MouseEvent
 import javax.swing.JScrollPane
 
 class ModelDiagramClipboardTest : BasePlatformTestCase() {
+    fun testPastePossibleIsDisabledDuringPanningAndRestoredOnRelease() {
+        val session = open()
+        session.canvas.setSize(600, 400)
+        click(session.canvas, 70, 55)
+        copy(session.canvas)
+        val provider = session.canvas.pasteProvider!!
+        assertTrue(provider.isPastePossible(DataContext.EMPTY_CONTEXT))
+        session.canvas.dispatchEvent(MouseEvent(session.canvas, MouseEvent.MOUSE_PRESSED, 0,
+            MouseEvent.BUTTON3_DOWN_MASK, 200, 200, 1, false, MouseEvent.BUTTON3))
+        assertTrue(session.canvas.isDragging)
+        repeat(100) { assertFalse(provider.isPastePossible(DataContext.EMPTY_CONTEXT)) }
+        session.canvas.dispatchEvent(MouseEvent(session.canvas, MouseEvent.MOUSE_RELEASED, 0,
+            0, 200, 200, 1, false, MouseEvent.BUTTON3))
+        assertTrue(provider.isPastePossible(DataContext.EMPTY_CONTEXT))
+        paste(session.canvas)
+        assertEquals(4, session.canvas.diagram.nodes.size)
+    }
+
     fun testPasteAfterZoomKeepsCopiedScreenAnchorAndModelSize() {
         val session = open()
         session.canvas.setSize(600, 400)
