@@ -19,29 +19,31 @@ internal class SqlKeywordCompletionProvider(private val project: Project) : Text
         return text.substring(start, end)
     }
 
-    override fun applyPrefixMatcher(result: CompletionResultSet, prefix: String): CompletionResultSet =
-        result.withPrefixMatcher(prefix).caseInsensitive()
+    override fun applyPrefixMatcher(result: CompletionResultSet, prefix: String): CompletionResultSet {
+        result.restartCompletionOnPrefixChange(".*\\..*")
+        return result.withPrefixMatcher(prefix).caseInsensitive()
+    }
 
     override fun acceptChar(char: Char): CharFilter.Result =
-        if (SqlLexer.isWord(char)) CharFilter.Result.ADD_TO_PREFIX else CharFilter.Result.HIDE_LOOKUP
+        if (SqlLexer.isWord(char) || char == '.') CharFilter.Result.ADD_TO_PREFIX else CharFilter.Result.HIDE_LOOKUP
 
     override fun fillCompletionVariants(parameters: CompletionParameters, prefix: String, result: CompletionResultSet) {
-        val text = parameters.originalFile.text
+        val text = parameters.editor.document.text
+        val offset = parameters.offset.coerceIn(0, text.length)
         if (!parameters.editor.isViewer && parameters.editor.document.isWritable &&
-            SqlLexer.completionAllowed(text, parameters.offset.coerceAtMost(text.length)) &&
-            (prefix.isNotEmpty() || parameters.invocationCount > 0)
+            (prefix.isNotEmpty() || parameters.invocationCount > 0 || text.getOrNull(offset - 1) == '.')
         ) {
+            val context = SqlCompletionAnalyzer.analyze(text, offset, DatabaseMetadataService.getInstance(project).snapshot())
             val candidates = linkedMapOf<String, MutableSet<String>>()
-            fun add(names: Iterable<String>, kind: String) {
-                names.filter { it.startsWith(prefix, ignoreCase = true) }.forEach { candidates.getOrPut(it) { linkedSetOf() }.add(kind) }
-            }
-            add(SqlKeywords.words, "SQL 키워드")
-            DatabaseMetadataService.getInstance(project).snapshot()?.let {
-                add(it.tableNames, "테이블")
-                add(it.columnNames, "컬럼")
+            val lookupNames = mutableMapOf<String, MutableSet<String>>()
+            val names = context.candidates + if (context.includeKeywords) SqlKeywords.words.map { SqlNameCandidate(it, it, "SQL 키워드") } else emptyList()
+            names.filter { it.lookupName.startsWith(prefix, ignoreCase = true) || it.text.startsWith(prefix, ignoreCase = true) }.forEach {
+                candidates.getOrPut(it.text) { linkedSetOf() }.add(it.kind)
+                lookupNames.getOrPut(it.text) { linkedSetOf() }.add(it.lookupName)
             }
             candidates.forEach { (name, kinds) ->
-                result.addElement(LookupElementBuilder.create(name).withCaseSensitivity(false).withTypeText(kinds.joinToString(" / "), true))
+                result.addElement(LookupElementBuilder.create(name).withLookupStrings(lookupNames.getValue(name))
+                    .withCaseSensitivity(false).withTypeText(kinds.joinToString(" / "), true))
             }
         }
         result.stopHere()

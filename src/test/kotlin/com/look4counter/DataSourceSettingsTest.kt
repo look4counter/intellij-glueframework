@@ -28,6 +28,84 @@ import javax.swing.JPasswordField
 import javax.swing.JTextField
 
 class DataSourceSettingsTest : BasePlatformTestCase() {
+    fun testFormattingStyleOptionsApplyResetAndPersistence() {
+        val formatting = com.look4counter.queryeditor.settings.QueryFormattingSettings.getInstance(project)
+        val original = formatting.state
+        try {
+            formatting.loadState(com.look4counter.queryeditor.settings.QueryFormattingState())
+            configurable = GlueQueryEditorConfigurable(project)
+            var component = configurable!!.createComponent()
+            configurable!!.reset()
+            val equals = control<JCheckBox>(component, "format.alignWhereEquals")
+            val aliases = control<JCheckBox>(component, "format.alignSelectAs")
+            assertFalse(equals.isSelected)
+            assertFalse(aliases.isSelected)
+            assertFalse(configurable!!.isModified())
+            equals.doClick()
+            assertTrue(configurable!!.isModified())
+            assertFalse(formatting.state.alignWhereEquals)
+            configurable!!.reset()
+            assertFalse(equals.isSelected)
+            aliases.doClick()
+            configurable!!.apply()
+            assertFalse(formatting.state.alignWhereEquals)
+            assertTrue(formatting.state.alignSelectAs)
+            assertFalse(configurable!!.isModified())
+            equals.doClick()
+            configurable!!.apply()
+            val xml = XmlSerializer.serialize(formatting.state)
+            val restored = com.look4counter.queryeditor.settings.QueryFormattingSettings()
+            restored.loadState(XmlSerializer.deserialize(xml, com.look4counter.queryeditor.settings.QueryFormattingState::class.java))
+            assertEquals(formatting.state, restored.state)
+            val detached = formatting.state
+            detached.alignWhereEquals = false
+            assertTrue(formatting.state.alignWhereEquals)
+            aliases.doClick()
+            configurable!!.disposeUIResources()
+            component = configurable!!.createComponent()
+            configurable!!.reset()
+            assertTrue(control<JCheckBox>(component, "format.alignWhereEquals").isSelected)
+            assertTrue(control<JCheckBox>(component, "format.alignSelectAs").isSelected)
+            assertFalse(configurable!!.isModified())
+        } finally { formatting.loadState(original) }
+    }
+
+    fun testInvalidDatasourceDoesNotApplyFormattingDraft() {
+        val formatting = com.look4counter.queryeditor.settings.QueryFormattingSettings.getInstance(project)
+        val original = formatting.state
+        try {
+            formatting.loadState(com.look4counter.queryeditor.settings.QueryFormattingState())
+            configurable = GlueQueryEditorConfigurable(project)
+            val component = configurable!!.createComponent()
+            configurable!!.reset()
+            control<JCheckBox>(component, "format.alignWhereEquals").isSelected = true
+            control<JButton>(component, "datasource.add").doClick()
+            control<JTextField>(component, "datasource.url").text = "invalid"
+            try { configurable!!.apply(); fail("Expected validation error") } catch (_: com.intellij.openapi.options.ConfigurationException) { }
+            assertFalse(formatting.state.alignWhereEquals)
+            assertTrue(configurable!!.isModified())
+        } finally { formatting.loadState(original) }
+    }
+
+    fun testFormattingOnlyApplyPreservesCachedMetadata() {
+        val formatting = com.look4counter.queryeditor.settings.QueryFormattingSettings.getInstance(project)
+        val original = formatting.state
+        val definition = DataSourceDefinition("cached", "Local", "jdbc:oracle:thin:@cached", "oracle.jdbc.OracleDriver", databaseKind = "ORACLE")
+        try {
+            formatting.loadState(com.look4counter.queryeditor.settings.QueryFormattingState())
+            settings.replaceDataSources(listOf(definition))
+            val metadata = com.look4counter.queryeditor.database.DatabaseMetadataService.getInstance(project)
+            val request = metadata.beginRefresh().single()
+            assertTrue(metadata.complete(request, com.look4counter.queryeditor.database.MetadataSnapshot(listOf(
+                com.look4counter.queryeditor.database.TableMetadata(null, null, "EMP", listOf("ID"))))))
+            val component = openSettings()
+            control<JCheckBox>(component, "format.alignSelectAs").isSelected = true
+            configurable!!.apply()
+            assertEquals(listOf("EMP"), metadata.snapshot()!!.tableNames)
+            assertEquals(listOf(definition), settings.dataSources)
+        } finally { formatting.loadState(original) }
+    }
+
     fun testConnectionButtonUsesUnsavedDraftAndPasswordPolicyWithoutSaving() {
         val store = MemoryStore()
         val manager = DataSourcePasswordManager("settings-test", store)

@@ -8,7 +8,11 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.components.JBPanel
+import com.intellij.ui.components.JBCheckBox
+import com.intellij.ui.TitledSeparator
+import com.intellij.util.ui.JBUI
 import java.awt.BorderLayout
+import java.awt.GridLayout
 import java.util.Locale
 import javax.swing.JComponent
 
@@ -17,6 +21,9 @@ open class GlueQueryEditorConfigurable(private val project: Project) : Searchabl
     private var component: JComponent? = null
     private var uiDisposable: Disposable? = null
     private val settings get() = DataSourceSettingsService.getInstance(project)
+    private val formattingSettings get() = QueryFormattingSettings.getInstance(project)
+    private var alignWhereEquals: JBCheckBox? = null
+    private var alignSelectAs: JBCheckBox? = null
 
     override fun getId(): String = "com.look4counter.glueframework.queryeditor"
     override fun getDisplayName(): String = "GlueQueryEditor"
@@ -25,6 +32,23 @@ open class GlueQueryEditorConfigurable(private val project: Project) : Searchabl
         uiDisposable = lifetime
         val settingsPanel = DataSourceSettingsPanel(::testDraftConnection).also { panel = it }
         JBPanel<JBPanel<*>>(BorderLayout()).apply {
+            add(JBPanel<JBPanel<*>>(BorderLayout(0, JBUI.scale(8))).apply {
+                border = JBUI.Borders.emptyBottom(12)
+                add(TitledSeparator("SQL 포매팅 스타일"), BorderLayout.NORTH)
+                add(JBPanel<JBPanel<*>>(GridLayout(0, 1, 0, JBUI.scale(4))).apply {
+                    border = JBUI.Borders.emptyLeft(20)
+                    add(JBCheckBox("WHERE절 등호에 맞춰 정렬").apply {
+                        name = "format.alignWhereEquals"
+                        isSelected = formattingSettings.state.alignWhereEquals
+                        alignWhereEquals = this
+                    })
+                    add(JBCheckBox("SELECT절 AS에 맞춰 정렬").apply {
+                        name = "format.alignSelectAs"
+                        isSelected = formattingSettings.state.alignSelectAs
+                        alignSelectAs = this
+                    })
+                }, BorderLayout.CENTER)
+            }, BorderLayout.NORTH)
             add(settingsPanel, BorderLayout.CENTER)
             add(DataSourceMetadataToolbar(project, lifetime), BorderLayout.SOUTH)
         }.also { component = it }
@@ -32,11 +56,15 @@ open class GlueQueryEditorConfigurable(private val project: Project) : Searchabl
 
     override fun reset() {
         panel?.reset(settings.dataSources)
+        alignWhereEquals?.isSelected = formattingSettings.state.alignWhereEquals
+        alignSelectAs?.isSelected = formattingSettings.state.alignSelectAs
     }
 
     override fun isModified(): Boolean {
         val drafts = panel?.snapshot() ?: return false
-        return drafts.map { it.definition } != settings.dataSources || drafts.any { it.password != null || it.clearPassword }
+        return drafts.map { it.definition } != settings.dataSources || drafts.any { it.password != null || it.clearPassword } ||
+            alignWhereEquals?.isSelected != formattingSettings.state.alignWhereEquals ||
+            alignSelectAs?.isSelected != formattingSettings.state.alignSelectAs
     }
 
     protected open fun createPasswordManager(): DataSourcePasswordManager = DataSourcePasswordManager(project.locationHash)
@@ -110,7 +138,8 @@ open class GlueQueryEditorConfigurable(private val project: Project) : Searchabl
             }, "DataSource 비밀번호 저장", false, project)
             if (failure != null) throw ConfigurationException("비밀번호를 저장하지 못했습니다. 보안 저장소 상태를 확인하고 다시 적용하세요.")
         }
-        settings.replaceDataSources(definitions)
+        if (definitions != settings.dataSources || passwords.isNotEmpty()) settings.replaceDataSources(definitions)
+        formattingSettings.loadState(QueryFormattingState(alignWhereEquals?.isSelected == true, alignSelectAs?.isSelected == true))
         panel?.reset(definitions)
     }
 
@@ -120,5 +149,7 @@ open class GlueQueryEditorConfigurable(private val project: Project) : Searchabl
         panel?.clear()
         panel = null
         component = null
+        alignWhereEquals = null
+        alignSelectAs = null
     }
 }

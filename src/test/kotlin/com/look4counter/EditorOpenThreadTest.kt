@@ -131,25 +131,21 @@ class EditorOpenThreadTest : BasePlatformTestCase() {
         } finally { Disposer.dispose(editor) }
     }
 
-    fun testServiceCreationAndSelectionWithoutWriteIntentPreservesSource() {
+    fun testLegacyFlagCannotEnableServiceEditorsWithoutWriteIntent() {
         val settings = com.look4counter.modeleditor.ModelEditorSettings.getInstance(project)
         val previous = settings.state
         settings.loadState(previous.copy(noUseGlueUmlAdFile = true))
         val text = """<service name="found-service" initial="Found" xmlns="http://www.poscoict.com/glueframework/service"><activity name="Found" class="sample.Found"><transition value="end"/></activity></service>"""
         val file = myFixture.addFileToProject("found-service.xml", text).virtualFile
-        var editor: FileEditor? = null
         try {
             withoutWriteIntent {
-                editor = ModelDesignEditorProvider().createEditor(project, file)
-                editor!!.selectNotify()
+                assertFalse(settings.state.noUseGlueUmlAdFile)
+                assertFalse(ModelDesignEditorProvider().accept(project, file))
+                assertFalse(com.look4counter.modeleditor.ModelSourceEditorProvider().accept(project, file))
             }
             UIUtil.dispatchAllInvocationEvents()
-            val canvas = components(editor!!.component).filterIsInstance<ModelDiagramCanvas>().single()
-            assertTrue(canvas.diagram.nodes.any { it.name == "Found" })
-            assertFalse(editor!!.isModified)
             assertEquals(text, com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(file)!!.text)
         } finally {
-            editor?.let(Disposer::dispose)
             settings.loadState(previous)
         }
     }

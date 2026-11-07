@@ -259,6 +259,13 @@ class ModelDiagramPropertiesTest : BasePlatformTestCase() {
 
     fun testWireCreationPersistsBothReferencesAndSingleUndoRedo() {
         val session = open()
+        session.editor.component.setSize(640, 480)
+        session.editor.component.doLayout()
+        val scroll = session.editor.component.components.filterIsInstance<JScrollPane>().single()
+        scroll.doLayout()
+        scroll.viewport.doLayout()
+        assertTrue(session.canvas.visibleRect.contains(70, 55))
+        assertTrue(session.canvas.visibleRect.contains(270, 55))
         val original = session.document.text
         performCreationAction(session.kind.wireCreationAction)
         assertTrue(session.canvas.wireCreationMode)

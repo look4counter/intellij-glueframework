@@ -42,6 +42,10 @@ class ModelServiceSaveListener : FileDocumentManagerListener {
             val manager = FileDocumentManager.getInstance()
             val document = manager.getCachedDocument(target)
             if (document != null) {
+                require(!manager.isDocumentUnsaved(document)) {
+                    "Service 출력에 저장하지 않은 변경사항이 있습니다. 변경사항을 저장하거나 폐기한 뒤 모델을 다시 저장하세요: ${target.presentableUrl}"
+                }
+                require(document.isWritable) { "Service 출력 문서가 읽기 전용입니다: ${target.presentableUrl}" }
                 if (document.text != content) document.setText(content)
                 manager.saveDocument(document)
             } else if (VfsUtil.loadText(target) != content) VfsUtil.saveText(target, content)

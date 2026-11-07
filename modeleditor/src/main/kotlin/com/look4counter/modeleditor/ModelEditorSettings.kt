@@ -34,7 +34,7 @@ class ModelEditorSettings(private val project: Project) : PersistentStateCompone
     fun colorForClass(name: String): Color? = classColors[name.trim()]
     fun foregroundForClass(name: String): Color? = classForegrounds[name.trim()]
     override fun loadState(state: ModelEditorState) {
-        saved = state.detached()
+        saved = state.detached().copy(noUseGlueUmlAdFile = false)
         val colors = linkedMapOf<String, Color>()
         val foregrounds = linkedMapOf<String, Color>()
         saved.presets.forEach { preset ->

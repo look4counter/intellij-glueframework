@@ -18,6 +18,32 @@ import javax.imageio.ImageIO
 import javax.swing.JScrollPane
 
 class ModelDiagramMiniMapTest : BasePlatformTestCase() {
+    fun testCoordinatesRenderBelowMiniMapAndUpdateAfterPanning() {
+        val canvas = canvas(diagram(activity(240.0, 240.0), state(500.0, 260.0))).apply {
+            background = Color.WHITE
+            font = java.awt.Font(java.awt.Font.DIALOG, java.awt.Font.PLAIN, 12)
+        }
+        val model = canvas.diagram
+        val first = render(canvas)
+        val frame = canvas.miniMapProjection!!.frame
+        fun pixels(image: BufferedImage, area: Rectangle): List<Int> = buildList {
+            val clipped = area.intersection(Rectangle(0, 0, image.width, image.height))
+            for (y in clipped.y until clipped.y + clipped.height) for (x in clipped.x until clipped.x + clipped.width) add(image.getRGB(x, y))
+        }
+        assertTrue(pixels(first, Rectangle(0, 0, 160, 32)).all { it == Color.WHITE.rgb })
+        val below = Rectangle(frame.x, frame.y + frame.height + 4, frame.width, canvas.getFontMetrics(canvas.font).height + 16)
+        assertTrue(pixels(first, below).any { it != Color.WHITE.rgb })
+        mouse(canvas, MouseEvent.MOUSE_PRESSED, 200, 200, MouseEvent.BUTTON3)
+        mouse(canvas, MouseEvent.MOUSE_DRAGGED, 260, 240, MouseEvent.BUTTON3)
+        val moved = render(canvas)
+        assertFalse(pixels(first, below) == pixels(moved, below))
+        mouse(canvas, MouseEvent.MOUSE_RELEASED, 260, 240, MouseEvent.BUTTON3)
+        assertSame(model, canvas.diagram)
+        val path = Path.of(".gradle-validation", "model-coordinates-minimap.png")
+        Files.createDirectories(path.parent)
+        ImageIO.write(render(canvas), "png", path.toFile())
+    }
+
     fun testPanningAutomaticallyShrinksAndEnlargesElementPixels() {
         val canvas = canvas(diagram(activity(200.0, 180.0)))
         val original = canvas.diagram

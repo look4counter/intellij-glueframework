@@ -998,7 +998,7 @@ class ModelDiagramTest : BasePlatformTestCase() {
         assertEquals("block", canvas.lastSelectedNode!!.id)
     }
 
-    fun testNavigationCoordinatesStayAtTopLeftAndLabelGetsBottomPixel() {
+    fun testWireLabelGetsBottomPixel() {
         val canvas = ModelDiagramCanvas()
         canvas.font = java.awt.Font("Dialog", java.awt.Font.PLAIN, 12)
         canvas.display(parse(sample()))
@@ -1006,14 +1006,6 @@ class ModelDiagramTest : BasePlatformTestCase() {
         val center = DiagramGeometry.labelCenter(DiagramGeometry.path(canvas.diagram.wires[1]))!!
         val oldHeight = canvas.getFontMetrics(canvas.font).height - 3
         assertEquals(canvas.background.rgb, before.getRGB(center.x.toInt(), (center.y + oldHeight / 2.0).toInt()))
-        drag(canvas, 600, 280, 40, 50)
-        val after = render(canvas)
-        val prefixBefore = (8..17).flatMap { x -> (8..24).map { y -> before.getRGB(x, y) } }
-        val prefixAfter = (8..17).flatMap { x -> (8..24).map { y -> after.getRGB(x, y) } }
-        assertEquals(prefixBefore, prefixAfter)
-        assertTrue(prefixBefore.any { it != canvas.background.rgb })
-        assertFalse((18..100).flatMap { x -> (8..24).map { y -> before.getRGB(x, y) } } ==
-            (18..100).flatMap { x -> (8..24).map { y -> after.getRGB(x, y) } })
     }
 
     fun testActivitySideHandlesResizeKeepOppositeEdgeAndClampMinimum() {
@@ -1446,7 +1438,9 @@ class ModelDiagramTest : BasePlatformTestCase() {
         val node = state(100.0, 100.0).copy(kind = DiagramNodeKind.FinalState)
         canvas.display(ModelDiagram(listOf(node), emptyList()))
         val image = render(canvas)
-        assertEquals(canvas.background.rgb, image.getRGB(102, 110))
+        for ((x, y) in listOf(101 to 110, 118 to 110, 110 to 101, 110 to 118)) {
+            assertEquals("링 내부의 배경 보존: ($x, $y)", canvas.background.rgb, image.getRGB(x, y))
+        }
         assertEquals(Color.BLACK.rgb, image.getRGB(110, 110))
         val distant = activity(900.0, 600.0).copy(id = "distant")
         canvas.display(ModelDiagram(listOf(node, distant), emptyList()))

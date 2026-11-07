@@ -51,39 +51,41 @@ class ModelEditorSettingsTest : BasePlatformTestCase() {
         configurable.disposeUIResources()
     }
 
-    fun testNoUseModelFileCheckboxApplyResetAndPersistence() {
+    fun testRetiredModelFileOptionIsAbsentAndLegacyTrueNormalizesToFalse() {
         val settings = ModelEditorSettings.getInstance(project)
+        val old = ModelEditorState(serviceDirectory = "saved-path", presets = mutableListOf(ActivityPreset("Kept")), noUseGlueUmlAdFile = true)
+        val legacyXml = com.intellij.util.xmlb.XmlSerializer.serialize(old)
+        settings.loadState(com.intellij.util.xmlb.XmlSerializer.deserialize(legacyXml, ModelEditorState::class.java))
+        assertFalse(settings.state.noUseGlueUmlAdFile)
+        assertEquals("saved-path", settings.state.serviceDirectory)
+        assertEquals("Kept", settings.state.presets.single().name)
+        settings.state.noUseGlueUmlAdFile = true
+        assertFalse(settings.state.noUseGlueUmlAdFile)
         val configurable = GlueModelEditorConfigurable(project)
         try {
-            configurable.createComponent()
-            var panel = configurable.panel!!
-            assertEquals("No use .glue_uml_ad file", panel.noUseGlueUmlAdFile.text)
-            assertFalse(panel.noUseGlueUmlAdFile.isSelected)
+            val root = configurable.createComponent()
+            fun containsRetiredOption(component: java.awt.Component): Boolean =
+                component is javax.swing.AbstractButton && component.text == "No use .glue_uml_ad file" ||
+                    component is java.awt.Container && component.components.any(::containsRetiredOption)
+            assertFalse(containsRetiredOption(root))
             assertFalse(configurable.isModified())
-            panel.noUseGlueUmlAdFile.doClick()
-            assertTrue(configurable.isModified())
-            assertFalse(settings.state.noUseGlueUmlAdFile)
-            configurable.apply()
-            assertTrue(settings.state.noUseGlueUmlAdFile)
-            assertFalse(configurable.isModified())
-            panel.noUseGlueUmlAdFile.doClick()
+            configurable.panel!!.serviceDirectory.text = ""
             assertTrue(configurable.isModified())
             configurable.reset()
-            assertTrue(panel.noUseGlueUmlAdFile.isSelected)
+            assertEquals("saved-path", configurable.panel!!.serviceDirectory.text)
             assertFalse(configurable.isModified())
+            configurable.panel!!.serviceDirectory.text = ""
+            configurable.apply()
+            assertFalse(settings.state.noUseGlueUmlAdFile)
+            assertEquals("Kept", settings.state.presets.single().name)
             val saved = com.intellij.util.xmlb.XmlSerializer.serialize(settings.state)
             val restored = com.intellij.util.xmlb.XmlSerializer.deserialize(saved, ModelEditorState::class.java)
+            assertFalse(restored.noUseGlueUmlAdFile)
             settings.loadState(restored)
             configurable.disposeUIResources()
             configurable.createComponent()
-            panel = configurable.panel!!
-            assertTrue(panel.noUseGlueUmlAdFile.isSelected)
             assertFalse(configurable.isModified())
-            panel.noUseGlueUmlAdFile.doClick()
-            configurable.apply()
             assertFalse(settings.state.noUseGlueUmlAdFile)
-            val legacy = com.intellij.util.xmlb.XmlSerializer.deserialize(org.jdom.Element("ModelEditorState"), ModelEditorState::class.java)
-            assertFalse(legacy.noUseGlueUmlAdFile)
         } finally { configurable.disposeUIResources() }
     }
 

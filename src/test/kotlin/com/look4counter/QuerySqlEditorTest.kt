@@ -24,6 +24,523 @@ import java.nio.file.Path
 import javax.swing.JList
 
 class QuerySqlEditorTest : BasePlatformTestCase() {
+    private fun columnErrors(field: EditorTextField) = field.editor!!.markupModel.allHighlighters.filter {
+        it.textAttributesKey == com.intellij.openapi.editor.colors.CodeInsightColors.ERRORS_ATTRIBUTES
+    }
+
+    fun testKnownColumnErrorsUpdateWithoutChangingSqlAndClearOnQuerySwitch() {
+        val sql = "WITH t AS (SELECT id FROM physical) SELECT t.missing FROM t WHERE t.bad=1"
+        val field = openSql(sql, secondQuery = true)
+        val source = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
+        val sourceBefore = source.text
+        com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("column errors", { columnErrors(field).size == 2 }, 10)
+        assertEquals(listOf("missing", "bad"), columnErrors(field).sortedBy { it.startOffset }.map { field.text.substring(it.startOffset, it.endOffset) })
+        assertTrue(columnErrors(field).all { it.errorStripeTooltip.toString().contains("컬럼이 없습니다") })
+        assertTrue(columnErrors(field).all {
+            it.getTextAttributes(field.editor!!.colorsScheme)?.effectType == com.intellij.openapi.editor.markup.EffectType.WAVE_UNDERSCORE
+        })
+        assertEquals(sql, field.text)
+        assertEquals(sourceBefore, source.text)
+        val fixed = sql.replace("missing", "id").replace("bad", "id")
+        WriteCommandAction.runWriteCommandAction(project) { field.document.setText(fixed) }
+        assertTrue(columnErrors(field).isEmpty())
+        UIUtil.dispatchAllInvocationEvents()
+        WriteCommandAction.runWriteCommandAction(project) { field.document.setText(sql) }
+        UIUtil.dispatchAllInvocationEvents()
+        com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("restored errors", { columnErrors(field).size == 2 }, 10)
+        val queries = descendants(design!!.component).filterIsInstance<JList<*>>().single { it.name == "query.list" }
+        queries.selectedIndex = 0
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals("select 100", field.text)
+        assertTrue(columnErrors(field).isEmpty())
+    }
+
+    fun testTraceUsesOneCenteredPromptWithoutFooter() {
+        val sql = "SELECT id\nFROM (\n SELECT id FROM physical\n) q\nWHERE missing=1"
+        val field = openSql(sql)
+        val list = traceList() as com.intellij.ui.components.JBList<*>
+        val prompt = "추적할 컬럼이나 테이블에 커서를 놓으세요."
+        assertEquals(prompt, list.emptyText.text)
+        assertFalse(list.emptyText.isShowAboveCenter)
+        assertTrue(descendants(design!!.component).none { it.name == "query.trace.status" })
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("id") + 1)
+        waitForTrace(listOf(3, 1))
+        assertEquals(prompt, list.emptyText.text)
+        val missing = sql.indexOf("missing") + 1
+        assertNotNull(com.look4counter.queryeditor.sql.SqlColumnTrace.analyze(sql, missing, null).message)
+        field.editor!!.caretModel.moveToOffset(missing)
+        assertEquals(prompt, list.emptyText.text)
+        assertNull(list.toolTipText)
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("id") + 1)
+        waitForTrace(listOf(3, 1))
+        assertEquals(prompt, list.emptyText.text)
+        assertFalse(list.emptyText.isShowAboveCenter)
+    }
+
+    fun testTraceShowsOnlyOutputStagesAlsoFromConditionCaret() {
+        val sql = "WITH t AS (\n SELECT id FROM physical\n)\nSELECT id\nFROM t\nWHERE id=1\nGROUP BY id\nHAVING id>0\nORDER BY id"
+        val field = openSql(sql)
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("SELECT id\n") + 8)
+        waitForTrace(listOf(2, 4))
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("WHERE id") + 7)
+        waitForTrace(listOf(2, 4))
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("SELECT id FROM") + 8)
+        waitForTrace(listOf(2, 4))
+        assertEquals(sql, field.text)
+    }
+
+    fun testInlineSubqueryFormattingAlignsFromWithoutMovingLines() {
+        val sql = "SELECT HELLO AS B\n     , (SELECT *\n             FROM DUAL) AS C\n  FROM FAVORITE"
+        val field = openSql(sql)
+        invokeFormatAction(formatAction(field))
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals("SELECT HELLO AS B\n     , (SELECT *\n          FROM DUAL) AS C\n  FROM FAVORITE", field.text)
+    }
+
+    fun testSavedAlignmentOptionsFormatWholeQueryWithUndoRedo() {
+        val settings = com.look4counter.queryeditor.settings.QueryFormattingSettings.getInstance(project)
+        val originalSettings = settings.state
+        val sql = "select AB as A\n,LONG_NAME as B\nfrom T\nwhere AB=AB\nand HELO=HI"
+        val plain = "SELECT AB AS A\n     , LONG_NAME AS B\n  FROM T\n WHERE AB = AB\n   AND HELO = HI"
+        val aligned = plain.replace("AB AS A", "AB        AS A").replace("WHERE AB =", "WHERE AB   =")
+        try {
+            val field = openSql(sql)
+            settings.loadState(com.look4counter.queryeditor.settings.QueryFormattingState(true, true))
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(sql, field.text)
+            invokeFormatAction(formatAction(field))
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(aligned, field.text)
+            val source = FileEditorProviderManager.getInstance().getProviderList(project, design!!.file!!)
+                .single { it.editorTypeId == "glue-query-source" }.createEditor(project, design!!.file!!) as TextEditor
+            try {
+                UndoManager.getInstance(project).undo(source)
+                UIUtil.dispatchAllInvocationEvents()
+                assertEquals(sql, field.text)
+                UndoManager.getInstance(project).redo(source)
+                UIUtil.dispatchAllInvocationEvents()
+                assertEquals(aligned, field.text)
+            } finally { Disposer.dispose(source) }
+            settings.loadState(com.look4counter.queryeditor.settings.QueryFormattingState())
+            invokeFormatAction(formatAction(field))
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(plain, field.text)
+        } finally { settings.loadState(originalSettings) }
+    }
+
+    fun testSavedAlignmentOptionsAffectOnlySelectedSql() {
+        val settings = com.look4counter.queryeditor.settings.QueryFormattingSettings.getInstance(project)
+        val originalSettings = settings.state
+        val part = "select A as X\n,LONG_NAME as Y\nfrom T\nwhere A=1\nand LONG_NAME=2"
+        val sql = "-- unchanged AS =  \n$part\n;select RAW as untouched from U where RAW=3"
+        try {
+            settings.loadState(com.look4counter.queryeditor.settings.QueryFormattingState(true, true))
+            val field = openSql(sql)
+            val start = sql.indexOf(part)
+            field.editor!!.selectionModel.setSelection(start, start + part.length)
+            invokeFormatAction(formatAction(field))
+            UIUtil.dispatchAllInvocationEvents()
+            val expected = "SELECT A         AS X\n     , LONG_NAME AS Y\n  FROM T\n WHERE A         = 1\n   AND LONG_NAME = 2"
+            assertEquals(sql.replace(part, expected), field.text)
+        } finally { settings.loadState(originalSettings) }
+    }
+
+    private fun traceList(): JList<*> = descendants(design!!.component).filterIsInstance<JList<*>>()
+        .single { it.name == "query.trace.list" }
+
+    private fun waitForTrace(lines: List<Int>) {
+        com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("column trace", {
+            val list = traceList()
+            (0 until list.model.size).map { (list.model.getElementAt(it) as com.look4counter.queryeditor.sql.SqlTraceEntry).line } == lines
+        }, 10)
+    }
+
+    fun testColumnTraceClickAndEnterNavigateWithoutChangingSql() {
+        val sql = "WITH TB_MAST AS (\n    SELECT SS\n      FROM DUAL\n)\n, TB_SUB AS (\n    SELECT *\n      FROM TB_MAST\n)\nSELECT SS\n  FROM TB_SUB A"
+        val field = openSql(sql)
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("SS") + 1)
+        waitForTrace(listOf(2, 6, 9))
+        val source = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
+        val sourceBefore = source.text
+        val list = traceList()
+        assertTrue(descendants(design!!.component).filterIsInstance<javax.swing.JLabel>().none { it.text == "TRACE" })
+        assertEquals(listOf("2: SELECT SS", "6: SELECT *", "9: SELECT SS"),
+            (0 until list.model.size).map { list.model.getElementAt(it).toString() })
+        list.setSize(300, 160)
+        val bounds = list.getCellBounds(0, 0)
+        val click = java.awt.event.MouseEvent(list, java.awt.event.MouseEvent.MOUSE_CLICKED,
+            System.currentTimeMillis(), 0, bounds.x + 4, bounds.y + 4, 1, false, java.awt.event.MouseEvent.BUTTON1)
+        list.mouseListeners.forEach { it.mouseClicked(click) }
+        assertEquals(sql.indexOf("SS"), field.editor!!.caretModel.offset)
+        assertEquals(3, list.model.size)
+        list.selectedIndex = 1
+        list.actionMap.get("trace.navigate").actionPerformed(null)
+        assertEquals(sql.indexOf("*"), field.editor!!.caretModel.offset)
+        assertEquals(sql, field.text)
+        assertEquals(sourceBefore, source.text)
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("DUAL"))
+        waitForTrace(listOf(3, 1, 7, 5, 10))
+    }
+
+    fun testTableTraceNavigatesSwitchesToColumnsAndClearsAfterQuerySwitch() {
+        val sql = "WITH t AS (\n SELECT id FROM physical\n)\nSELECT a.id\nFROM t a"
+        val field = openSql(sql, secondQuery = true)
+        val source = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
+        val sourceBefore = source.text
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("a.id") + 1)
+        waitForTrace(listOf(2, 1, 5))
+        val list = traceList()
+        list.setSize(300, 160)
+        val bounds = list.getCellBounds(0, 0)
+        val click = java.awt.event.MouseEvent(list, java.awt.event.MouseEvent.MOUSE_CLICKED,
+            System.currentTimeMillis(), 0, bounds.x + 4, bounds.y + 4, 1, false, java.awt.event.MouseEvent.BUTTON1)
+        list.mouseListeners.forEach { it.mouseClicked(click) }
+        assertEquals(sql.indexOf("physical"), field.editor!!.caretModel.offset)
+        assertEquals(3, list.model.size)
+        list.selectedIndex = 1
+        list.actionMap.get("trace.navigate").actionPerformed(null)
+        assertEquals(sql.indexOf("t AS"), field.editor!!.caretModel.offset)
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("a.id") + 3)
+        waitForTrace(listOf(2, 4))
+        field.editor!!.caretModel.moveToOffset(sql.lastIndexOf('a') + 1)
+        waitForTrace(listOf(2, 1, 5))
+        assertEquals(sql, field.text)
+        assertEquals(sourceBefore, source.text)
+        WriteCommandAction.runWriteCommandAction(project) { field.document.setText("SELECT * FROM replacement") }
+        assertEquals(0, list.model.size)
+        field.editor!!.caretModel.moveToOffset(field.text.length)
+        waitForTrace(listOf(1))
+        val queries = descendants(design!!.component).filterIsInstance<JList<*>>().single { it.name == "query.list" }
+        queries.selectedIndex = 0
+        UIUtil.dispatchAllInvocationEvents()
+        waitForTrace(emptyList())
+        assertEquals("select 100", field.text)
+    }
+
+    fun testColumnTraceInvalidatesAfterEditingAndSwitchingQueries() {
+        val sql = "WITH t AS (\n SELECT SS FROM DUAL\n)\nSELECT SS FROM t"
+        val field = openSql(sql, secondQuery = true)
+        field.editor!!.caretModel.moveToOffset(sql.lastIndexOf("SS") + 1)
+        waitForTrace(listOf(2, 4))
+        val list = traceList()
+        list.selectedIndex = 0
+        WriteCommandAction.runWriteCommandAction(project) { field.document.setText("SELECT AA FROM DUAL") }
+        assertEquals(0, list.model.size)
+        list.actionMap.get("trace.navigate").actionPerformed(null)
+        UIUtil.dispatchAllInvocationEvents()
+        field.editor!!.caretModel.moveToOffset("SELECT A".length)
+        waitForTrace(listOf(1))
+        val queries = descendants(design!!.component).filterIsInstance<JList<*>>().single { it.name == "query.list" }
+        queries.selectedIndex = 0
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals("select 100", field.text)
+        waitForTrace(emptyList())
+    }
+
+    fun testSecondProjectionCompletesAdjacentDerivedAlias() {
+        val sql = """
+            SELECT A.DEPT
+                 , B.
+              FROM (
+                       SELECT DEPT
+                            , JOB
+                            , SALARY
+                         FROM employee
+                   ) A
+                   (
+                       SELECT DEPT2
+                            , JOB
+                            , SALARY
+                         FROM employee
+                   ) B
+        """.trimIndent()
+        val field = openSql(sql)
+        configureCompletion(field, sql.indexOf("B.") + 2)
+        val choices = myFixture.completeBasic()!!
+        assertEquals(setOf("DEPT2", "JOB", "SALARY"), choices.map { it.lookupString }.toSet())
+        myFixture.lookup.currentItem = choices.single { it.lookupString == "DEPT2" }
+        myFixture.finishLookup('\n')
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(sql.replace("B.", "B.DEPT2"), field.text)
+    }
+
+    fun testAdjacentDerivedAliasOffersOnlyItsOwnOutputWithoutMetadata() {
+        val tail = "\n  FROM (\n           SELECT DEPT, JOB, SALARY FROM employee\n       ) A\n       (\n           SELECT DEPT2, JOB, SALARY FROM employee\n       ) B"
+        val field = openSql("SELECT A.$tail")
+        configureCompletion(field, "SELECT A.".length)
+        val choices = myFixture.completeBasic()!!
+        assertEquals(setOf("DEPT", "JOB", "SALARY"), choices.map { it.lookupString }.toSet())
+        myFixture.lookup.currentItem = choices.single { it.lookupString == "DEPT" }
+        myFixture.finishLookup('\n')
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals("SELECT A.DEPT$tail", field.text)
+        WriteCommandAction.runWriteCommandAction(project) { field.document.setText("SELECT B.$tail") }
+        UIUtil.dispatchAllInvocationEvents()
+        configureCompletion(field, "SELECT B.".length)
+        assertEquals(setOf("DEPT2", "JOB", "SALARY"), myFixture.completeBasic()!!.map { it.lookupString }.toSet())
+    }
+    fun testFormatOnlySelectionPreservesSurroundingSqlAndUndoRedo() {
+        val part = "select A,B from EMP"
+        val original = "-- untouched  \n" + part + "\n; select X,Y from OTHER"
+        val field = openSql(original)
+        val start = original.indexOf(part)
+        field.editor!!.selectionModel.setSelection(start, start + part.length)
+        invokeFormatAction(formatAction(field))
+        UIUtil.dispatchAllInvocationEvents()
+        val expected = original.replace(part, "SELECT A, B FROM EMP")
+        assertEquals(expected, field.text)
+        val source = FileEditorProviderManager.getInstance().getProviderList(project, design!!.file!!)
+            .single { it.editorTypeId == "glue-query-source" }.createEditor(project, design!!.file!!) as TextEditor
+        try {
+            UndoManager.getInstance(project).undo(source)
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(original, field.text)
+            UndoManager.getInstance(project).redo(source)
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(expected, field.text)
+        } finally { Disposer.dispose(source) }
+    }
+    private fun formatButton(): javax.swing.JButton {
+        assertTrue(descendants(design!!.component).none { it.name == "query.sql.format" })
+        val field = descendants(design!!.component).filterIsInstance<EditorTextField>().single { it.name == "query.sql" }
+        val action = formatAction(field)
+        val event = com.intellij.openapi.actionSystem.AnActionEvent.createFromAnAction(
+            action, null, "test", com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT)
+        action.update(event)
+        return javax.swing.JButton().apply {
+            isEnabled = event.presentation.isEnabled
+            addActionListener { invokeFormatAction(action) }
+        }
+    }
+    private fun formatAction(field: EditorTextField): com.intellij.openapi.actionSystem.AnAction {
+        val actions = field.getClientProperty(com.intellij.openapi.actionSystem.AnAction.ACTIONS_KEY) as? List<*>
+        assertNotNull(actions)
+        return actions!!.filterIsInstance<com.intellij.openapi.actionSystem.AnAction>().single { it.templatePresentation.text == "SQL 포맷" }
+    }
+
+    private fun invokeFormatAction(action: com.intellij.openapi.actionSystem.AnAction) {
+        action.actionPerformed(com.intellij.openapi.actionSystem.AnActionEvent.createFromAnAction(
+            action, null, "test", com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT))
+    }
+
+    private fun withoutWriteIntent(action: () -> Unit) {
+        val application = com.intellij.openapi.application.ApplicationManager.getApplication()
+            as com.intellij.openapi.application.impl.ApplicationImpl
+        application.threadingSupport.releaseTheAcquiredWriteIntentLockThenExecuteActionAndTakeWriteIntentLockBack(action)
+    }
+
+    fun testFormatShortcutUsesIdeKeymapAndWorksFromUnlockedContext() {
+        val field = openSql("select A,B from EMP")
+        val action = formatAction(field)
+        val standard = com.intellij.openapi.actionSystem.ActionManager.getInstance()
+            .getAction(com.intellij.openapi.actionSystem.IdeActions.ACTION_EDITOR_REFORMAT)
+        assertEquals(standard.shortcutSet.shortcuts.toList(), action.shortcutSet.shortcuts.toList())
+        withoutWriteIntent { invokeFormatAction(action) }
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals("SELECT A, B FROM EMP", field.text)
+    }
+
+    fun testFormatRejectsInvalidSqlWithoutChangingSource() {
+        val field = openSql("select 'open")
+        val source = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
+        val original = source.text
+        val stamp = source.modificationStamp
+        formatButton().doClick()
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals("select 'open", field.text)
+        assertEquals(original, source.text)
+        assertEquals(stamp, source.modificationStamp)
+        val status = descendants(design!!.component).filterIsInstance<javax.swing.JLabel>().single { it.name == "query.status" }
+        assertTrue(status.text.contains("닫히지 않은"))
+    }
+
+    fun testFormatProtectsReadonlyFileAndDocument() {
+        val field = openSql("select A,B from EMP")
+        val file = design!!.file!!
+        val source = FileDocumentManager.getInstance().getDocument(file)!!
+        val original = source.text
+        val action = formatAction(field)
+        WriteCommandAction.runWriteCommandAction(project) { file.isWritable = false }
+        try {
+            UIUtil.dispatchAllInvocationEvents()
+            assertFalse(formatButton().isEnabled)
+            invokeFormatAction(action)
+            assertEquals(original, source.text)
+        } finally { WriteCommandAction.runWriteCommandAction(project) { file.isWritable = true } }
+        UIUtil.dispatchAllInvocationEvents()
+        source.setReadOnly(true)
+        try {
+            design!!.selectNotify()
+            UIUtil.dispatchAllInvocationEvents()
+            assertFalse(formatButton().isEnabled)
+            invokeFormatAction(action)
+            assertEquals(original, source.text)
+        } finally { source.setReadOnly(false) }
+    }
+
+    fun testFormatProtectsMixedInvalidAndMissingQueriesAndDisposedEditor() {
+        val field = openSql("select A,B from EMP")
+        val source = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
+        val action = formatAction(field)
+        for (xml in listOf("<queryMap><query id=\"target\">select A<!-- keep --><if/> from EMP</query></queryMap>",
+            "<queryMap>", "<queryMap/>")) {
+            WriteCommandAction.runWriteCommandAction(project) { source.setText(xml) }
+            UIUtil.dispatchAllInvocationEvents()
+            assertFalse(formatButton().isEnabled)
+            invokeFormatAction(action)
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(xml, source.text)
+        }
+        val original = source.text
+        Disposer.dispose(design!!)
+        design = null
+        invokeFormatAction(action)
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(original, source.text)
+    }
+
+    fun testFormatDeferredBeforeSelectionChangeDoesNotModifyEitherQuery() {
+        openSql("select A,B from EMP", secondQuery = true)
+        val source = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
+        val original = source.text
+        val button = formatButton()
+        val list = descendants(design!!.component).filterIsInstance<JList<*>>().single { it.name == "query.list" }
+        withoutWriteIntent {
+            button.doClick()
+            list.selectedIndex = 0
+        }
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(original, source.text)
+    }
+
+    fun testFormatDoesNotOverwriteNewSourceWhenPendingEditConflicts() {
+        val field = openSql("select A,B from EMP")
+        val source = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
+        val latest = source.text.replace("select A,B from EMP", "select X,Y from EMP")
+        WriteCommandAction.runWriteCommandAction(project) {
+            field.document.setText("select C,D from EMP")
+            source.setText(latest)
+        }
+        formatButton().doClick()
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(latest, source.text)
+        assertEquals("select X,Y from EMP", field.text)
+    }
+
+    fun testFormatSelectedSqlUpdatesOnlyItsSourceAndSupportsSingleUndoRedo() {
+        val original = "select COL1,COL2 from DUAL where COL1=COL and COL2=COL"
+        val expected = "SELECT COL1, COL2 FROM DUAL WHERE COL1 = COL AND COL2 = COL"
+        val field = openSql(original, secondQuery = true)
+        val button = formatButton()
+        assertTrue(button.isEnabled)
+        button.doClick()
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(expected, field.text)
+        val rootDocument = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
+        val manager = PsiDocumentManager.getInstance(project)
+        manager.commitDocument(rootDocument)
+        val queries = (manager.getPsiFile(rootDocument) as XmlFile).rootTag!!.subTags
+        assertEquals("select 100", queries[0].value.textElements.joinToString("") { it.value })
+        assertEquals(expected, queries[1].value.textElements.joinToString("") { it.value })
+        val stamp = rootDocument.modificationStamp
+        button.doClick()
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(stamp, rootDocument.modificationStamp)
+        FileDocumentManager.getInstance().saveDocument(rootDocument)
+        assertEquals(rootDocument.text, String(design!!.file!!.contentsToByteArray(), Charsets.UTF_8).replace("\r\n", "\n"))
+        val source = FileEditorProviderManager.getInstance().getProviderList(project, design!!.file!!)
+            .single { it.editorTypeId == "glue-query-source" }.createEditor(project, design!!.file!!) as TextEditor
+        try {
+            UndoManager.getInstance(project).undo(source)
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(original, field.text)
+            UndoManager.getInstance(project).redo(source)
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(expected, field.text)
+        } finally { Disposer.dispose(source) }
+    }
+
+    private fun contextMetadata(): com.look4counter.queryeditor.settings.DataSourceSettingsService {
+        val settings = com.look4counter.queryeditor.settings.DataSourceSettingsService.getInstance(project)
+        settings.replaceDataSources(listOf(com.look4counter.queryeditor.settings.DataSourceDefinition(
+            "context", "Context", "jdbc:postgresql://localhost/db")))
+        val service = com.look4counter.queryeditor.database.DatabaseMetadataService.getInstance(project)
+        service.complete(service.beginRefresh().single(), com.look4counter.queryeditor.database.MetadataSnapshot(listOf(
+            com.look4counter.queryeditor.database.TableMetadata(null, "public", "emp_table", listOf("id", "emp_id", "emp_name")),
+            com.look4counter.queryeditor.database.TableMetadata(null, "public", "emp_view", listOf("view_id")),
+            com.look4counter.queryeditor.database.TableMetadata(null, "public", "dept_table", listOf("id", "dept_name", "emp_unrelated")),
+        )))
+        return settings
+    }
+
+    fun testFromCompletionExcludesColumns() {
+        val settings = contextMetadata()
+        try {
+            val field = openSql("select * from emp_")
+            configureCompletion(field, field.text.length)
+            assertEquals(setOf("emp_table", "emp_view"), myFixture.completeBasic()!!.map { it.lookupString }.toSet())
+        } finally { settings.replaceDataSources(emptyList()) }
+    }
+
+    fun testAliasCompletionUsesFollowingFromAndPreservesQualifierOnInsertion() {
+        val settings = contextMetadata()
+        try {
+            val sql = "select e.emp_ from emp_table AS e join dept_table d on e.id = d.id"
+            val field = openSql(sql, secondQuery = true)
+            configureCompletion(field, sql.indexOf("emp_") + 4)
+            val variants = myFixture.completeBasic()!!
+            assertEquals(setOf("emp_id", "emp_name"), variants.map { it.lookupString }.toSet())
+            myFixture.lookup.currentItem = variants.single { it.lookupString == "emp_name" }
+            myFixture.finishLookup('\n')
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(sql.replace("e.emp_ ", "e.emp_name "), field.text)
+            val rootDocument = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
+            PsiDocumentManager.getInstance(project).commitDocument(rootDocument)
+            val queries = (PsiDocumentManager.getInstance(project).getPsiFile(rootDocument) as XmlFile).rootTag!!.subTags
+            assertEquals("select 100", queries[0].value.textElements.joinToString("") { it.value })
+            assertEquals(field.text, queries[1].value.textElements.joinToString("") { it.value })
+            val source = FileEditorProviderManager.getInstance().getProviderList(project, design!!.file!!)
+                .single { it.editorTypeId == "glue-query-source" }.createEditor(project, design!!.file!!) as TextEditor
+            try {
+                UndoManager.getInstance(project).undo(source)
+                UIUtil.dispatchAllInvocationEvents()
+                assertEquals(sql, field.text)
+                UndoManager.getInstance(project).redo(source)
+                UIUtil.dispatchAllInvocationEvents()
+                assertEquals(sql.replace("e.emp_ ", "e.emp_name "), field.text)
+            } finally { Disposer.dispose(source) }
+        } finally { settings.replaceDataSources(emptyList()) }
+    }
+
+    fun testCteCompletionAfterDotAndDuplicateColumnInsertion() {
+        val settings = contextMetadata()
+        try {
+            val sql = "WITH t(a,b) AS (SELECT id,emp_name FROM emp_table) SELECT x. FROM t x"
+            val field = openSql(sql)
+            configureCompletion(field, sql.indexOf("x.") + 2)
+            val psi = PsiDocumentManager.getInstance(project).getPsiFile(field.document)!!
+            assertTrue(com.intellij.util.textCompletion.TextCompletionContributor().invokeAutoPopup(psi.findElementAt(0)!!, '.'))
+            val variants = myFixture.completeBasic()!!
+            assertEquals(setOf("a", "b"), variants.map { it.lookupString }.toSet())
+            myFixture.lookup.currentItem = variants.single { it.lookupString == "b" }
+            myFixture.finishLookup('\n')
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(sql.replace("x. ", "x.b "), field.text)
+
+            val duplicate = "SELECT id FROM emp_table e JOIN dept_table d ON e.id=d.id"
+            WriteCommandAction.runWriteCommandAction(project) { field.document.setText(duplicate) }
+            UIUtil.dispatchAllInvocationEvents()
+            configureCompletion(field, duplicate.indexOf("id") + 2)
+            val choices = myFixture.completeBasic()!!
+            assertTrue(choices.any { it.lookupString == "e.id" })
+            assertTrue(choices.any { it.lookupString == "d.id" })
+            myFixture.lookup.currentItem = choices.single { it.lookupString == "d.id" }
+            myFixture.finishLookup('\n')
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(duplicate.replaceFirst("SELECT id", "SELECT d.id"), field.text)
+        } finally { settings.replaceDataSources(emptyList()) }
+    }
+
     fun testSqlBracePairsFollowCaretAndIgnoreQuotedAndCommentedBraces() {
         val sql = "select (a + [b * {c} ] ), '(' -- )\n /* [ ] */ x"
         val field = openSql(sql)
@@ -71,7 +588,7 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
         editor.caretModel.moveToOffset(7)
         assertEquals(2, highlights().size)
         val initial = highlights()
-        val list = descendants(design!!.component).filterIsInstance<JList<*>>().single()
+        val list = descendants(design!!.component).filterIsInstance<JList<*>>().single { it.name == "query.list" }
         list.selectedIndex = 0
         UIUtil.dispatchAllInvocationEvents()
         assertTrue(editor.isDisposed)
@@ -114,7 +631,7 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
         design = FileEditorProviderManager.getInstance().getProviderList(project, file)
             .single { it.editorTypeId == "glue-query-design" }.createEditor(project, file)
         UIUtil.dispatchAllInvocationEvents()
-        if (secondQuery) descendants(design!!.component).filterIsInstance<JList<*>>().single().selectedIndex = 1
+        if (secondQuery) descendants(design!!.component).filterIsInstance<JList<*>>().single { it.name == "query.list" }.selectedIndex = 1
         val field = descendants(design!!.component).filterIsInstance<EditorTextField>().single { it.name == "query.sql" }
         field.ensureWillComputePreferredSize()
         field.preferredSize
@@ -166,7 +683,7 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
             UndoManager.getInstance(project).redo(source)
             UIUtil.dispatchAllInvocationEvents()
             assertEquals(listOf("0:", "1:", "2:"), parameterHints(field).map { it.second })
-            val list = descendants(design!!.component).filterIsInstance<JList<*>>().single()
+            val list = descendants(design!!.component).filterIsInstance<JList<*>>().single { it.name == "query.list" }
             list.selectedIndex = 0
             assertTrue(parameterHints(field).isEmpty())
             list.selectedIndex = 1
@@ -197,6 +714,7 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
         assertEquals(Color(0xC46600).rgb, values.first().color!!.rgb)
         assertEquals(Color(0x175BC1).rgb, values.first { it.type == "GLUE_SQL_NUMBER" }.color!!.rgb)
         assertEquals(Color(0x26823B).rgb, values.first { it.type == "GLUE_SQL_QUOTED" }.color!!.rgb)
+        assertTrue(values.filter { it.type == "GLUE_SQL_COMMENT" }.all { it.color!!.rgb == Color(0x3B7F4C).rgb })
         assertEquals(field.text, values.joinToString("") { it.text })
     }
 
@@ -238,7 +756,7 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
             UndoManager.getInstance(project).redo(source)
             UIUtil.dispatchAllInvocationEvents()
             assertEquals("SELECT", field.text.uppercase())
-            val list = descendants(design!!.component).filterIsInstance<JList<*>>().single()
+            val list = descendants(design!!.component).filterIsInstance<JList<*>>().single { it.name == "query.list" }
             list.selectedIndex = 0
             assertEquals("GLUE_SQL_KEYWORD", tokens(field).first().type)
             list.selectedIndex = 1
@@ -350,6 +868,7 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
             assertEquals(Color(if (dark) 0x6CA8F5 else 0x175BC1).rgb, values.first { it.type == "GLUE_SQL_NUMBER" }.color!!.rgb)
             assertEquals(Color(if (dark) 0x78C78B else 0x26823B).rgb, values.first { it.type == "GLUE_SQL_QUOTED" }.color!!.rgb)
             assertEquals(Color(if (dark) 0x56D4DD else 0x008B9A).rgb, values.first { it.type == "GLUE_SQL_PARAMETER" }.color!!.rgb)
+            assertTrue(values.filter { it.type == "GLUE_SQL_COMMENT" }.all { it.color!!.rgb == Color(if (dark) 0x6A9955 else 0x3B7F4C).rgb })
         } finally {
             design?.let(Disposer::dispose)
             design = null
@@ -374,8 +893,8 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
             val field = openSql("select emp_")
             configureCompletion(field, field.text.length)
             val variants = myFixture.completeBasic()!!
-            assertEquals(setOf("emp_table", "emp_id", "emp_name"), variants.map { it.lookupString }.toSet())
-            assertEquals(3, variants.size)
+            assertEquals(setOf("emp_id", "emp_name"), variants.map { it.lookupString }.toSet())
+            assertEquals(2, variants.size)
             myFixture.lookup.currentItem = variants.single { it.lookupString == "emp_id" }
             myFixture.finishLookup('\n')
             UIUtil.dispatchAllInvocationEvents()

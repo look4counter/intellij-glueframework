@@ -9,7 +9,6 @@ import com.intellij.openapi.fileChooser.FileChooser
 import com.intellij.openapi.ui.TextFieldWithBrowseButton
 import com.intellij.ui.ColorPanel
 import com.intellij.ui.components.JBList
-import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBScrollPane
 import java.awt.BorderLayout
 import java.awt.Color
@@ -53,7 +52,6 @@ class GlueModelEditorConfigurable(private val project: Project) : SearchableConf
 
 class ModelEditorSettingsPanel(private val project: Project) : JPanel(BorderLayout(8, 8)) {
     val serviceDirectory = TextFieldWithBrowseButton()
-    val noUseGlueUmlAdFile = JBCheckBox("No use .glue_uml_ad file")
     val color = ColorPanel()
     val foregroundColor = ColorPanel()
     private val model = DefaultListModel<ActivityPreset>()
@@ -75,8 +73,7 @@ class ModelEditorSettingsPanel(private val project: Project) : JPanel(BorderLayo
             val chosen = FileChooser.chooseFile(chooser, project, ServiceFiles.directory(project, serviceDirectory.text))
             if (chosen != null) ServiceFiles.relativeDirectory(project, chosen.url)?.let { serviceDirectory.text = it }
         }
-        add(FormBuilder.createFormBuilder().addLabeledComponent("Service 저장 경로", serviceDirectory)
-            .addComponent(noUseGlueUmlAdFile).panel, BorderLayout.NORTH)
+        add(FormBuilder.createFormBuilder().addLabeledComponent("Service 저장 경로", serviceDirectory).panel, BorderLayout.NORTH)
         list.cellRenderer = object : DefaultListCellRenderer() {
             override fun getListCellRendererComponent(list: JList<*>, value: Any?, index: Int, selected: Boolean, focus: Boolean): java.awt.Component {
                 super.getListCellRendererComponent(list, (value as? ActivityPreset)?.name.orEmpty(), index, selected, focus)
@@ -143,13 +140,12 @@ class ModelEditorSettingsPanel(private val project: Project) : JPanel(BorderLayo
         if (selected in presets.indices) currentPreset(commitEditing)?.let { presets[selected] = it }
         val directory = serviceDirectory.text.trim()
         return ModelEditorState(ServiceFiles.relativeDirectory(project, directory) ?: directory,
-            presets, noUseGlueUmlAdFile.isSelected)
+            presets)
     }
     fun load(state: ModelEditorState) {
         loading = true
         selected = -1; editor = null
         serviceDirectory.text = ServiceFiles.relativeDirectory(project, state.serviceDirectory) ?: state.serviceDirectory
-        noUseGlueUmlAdFile.isSelected = state.noUseGlueUmlAdFile
         model.clear()
         state.detached().presets.forEach(model::addElement)
         list.selectedIndex = if (model.isEmpty) -1 else 0

@@ -1340,13 +1340,16 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             g.transform = screenTransform
             g.color = wireColor
             val visible = visibleRect
-            g.drawString("x: ${pan.x.roundToInt()}, y: ${pan.y.roundToInt()}", visible.x + 8, visible.y + g.fontMetrics.ascent + 8)
-            var propertyY = visible.y + g.fontMetrics.ascent + 8 + g.fontMetrics.height
+            var propertyY = visible.y + g.fontMetrics.ascent + 8
             diagramPropertyLines.forEach { line ->
                 g.drawString(line, visible.x + 8, propertyY)
                 propertyY += g.fontMetrics.height
             }
             drawMiniMap(g)
+            miniMapProjection?.frame?.let { frame ->
+                g.drawString("x: ${pan.x.roundToInt()}, y: ${pan.y.roundToInt()}",
+                    frame.x + 8, frame.y + frame.height + g.fontMetrics.ascent + 8)
+            }
         } finally { g.dispose() }
     }
 
