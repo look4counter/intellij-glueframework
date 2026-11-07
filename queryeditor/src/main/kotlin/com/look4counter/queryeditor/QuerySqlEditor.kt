@@ -39,5 +39,6 @@ internal class QuerySqlEditor(project: Project, document: Document) :
         gutterComponentEx.reserveRightFreePaintersAreaWidth(gutterSpace, JBUI.scale(18))
         SqlParameterHints.install(this)
         com.look4counter.queryeditor.sql.SqlBraceHighlighting.install(this)
+        com.look4counter.queryeditor.sql.SqlColumnErrorHighlighting.install(this)
     }
 }

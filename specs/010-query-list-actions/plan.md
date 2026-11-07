@@ -34,3 +34,9 @@ Kotlin 2.3.20, IntelliJ 2025.3.6.1, Swing, XML PSI와 기존 Query 문서 모델
 ## 버튼 크기 보완 계획
 
 QueryDesignEditor의 다섯 JButton에 JBUI.size(32, 32)를 선호·최소 크기로 지정하고 margin은 JBUI.insets(4)로 설정한다. 아이콘 크기와 실행·활성화 처리는 유지한다. 새 기술 조사가 필요하지 않다. 기존 렌더링 높이를 36으로 맞춰 전체 버튼을 확인하고 아이콘·버튼 동작 테스트와 ZIP 빌드를 수행한다.
+
+## 쿼리 목록 Speed Search 설계 (2026-11-08)
+
+QueryDesignEditor.kt의 JBList<QueryEntry>에 SDK의 ListSpeedSearch.installOn을 적용한다. QueryEntry.toString이 현재 표시 ID를 제공하므로 별도 검색 모델·키 리스너·필터를 만들지 않는다. 기본 검색 팝업·키 처리·검색 탐색을 플랫폼에 위임하고 기존 renderer·패딩·selection listener를 유지한다. 목록 모델이 갱신되어도 같은 JBList를 사용하므로 새 항목과 ID를 즉시 참조한다. 검색은 읽기 전용 문서에서도 사용한다.
+
+QueryDesignEditorTest.kt에서 SpeedSearchSupply와 플랫폼 ListSpeedSearch 인스턴스, ID 선택 및 SQL·속성 동기화·문서 비변경·ID 갱신·일치 없음·빈 목록을 검증한다. 관련 QuerySqlEditorTest와 기존 목록 동작 회귀도 실행한다. 데이터 모델·의존성 변경은 없다.

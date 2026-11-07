@@ -33,14 +33,16 @@ class ModelEditorCreationTraceTest : BasePlatformTestCase() {
         assertTrue(canvas.diagram.nodes.isEmpty())
     }
 
-    fun testPressReleaseAndDragCreateOnceAtReleasePosition() {
+    fun testPressReleaseAndDragCreateOnceAtPressPosition() {
         val canvas = ModelDiagramCanvas().apply { setSize(600, 400); setCreationKind(DiagramNodeKind.Activity) }
         var submitted = 0
         var submittedLocation: DiagramPoint? = null
         canvas.onChildCreateRequested = { _, location -> submitted++; submittedLocation = location }
         canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, 1000, 0, 300, 200, 1, false, MouseEvent.BUTTON1))
+        val firstPosition = canvas.ghostNode!!.location
         canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, 1010, 0, 301, 201, 1, false, MouseEvent.BUTTON1))
         assertEquals(1, submitted)
+        assertEquals(firstPosition, submittedLocation)
         canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, 1010, 0, 301, 201, 1, false, MouseEvent.BUTTON1))
         assertEquals(1, submitted)
         canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, 2000, 0, 300, 200, 1, false, MouseEvent.BUTTON1))
@@ -48,13 +50,31 @@ class ModelEditorCreationTraceTest : BasePlatformTestCase() {
         canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_DRAGGED, 2005, MouseEvent.BUTTON1_DOWN_MASK,
             320, 220, 0, false, MouseEvent.NOBUTTON))
         val destination = canvas.ghostNode!!.location
-        assertEquals(start + DiagramPoint(20.0, 20.0), destination)
+        assertEquals(start, destination)
         canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, 2010, 0, 320, 220, 1, false, MouseEvent.BUTTON1))
         assertEquals(2, submitted)
         assertEquals(destination, canvas.ghostNode!!.location)
         assertEquals(destination, submittedLocation)
         canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_CLICKED, 2010, 0, 320, 220, 1, false, MouseEvent.BUTTON1))
         assertEquals(2, submitted)
+    }
+
+    fun testZoomedCreationKeepsPressPositionWhileDragging() {
+        val canvas = ModelDiagramCanvas().apply {
+            setSize(600, 400)
+            setZoom(1.5)
+            navigateTo(DiagramPoint(200.0, 150.0))
+            setCreationKind(DiagramNodeKind.Activity)
+        }
+        var location: DiagramPoint? = null
+        canvas.onChildCreateRequested = { _, point -> location = point }
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_PRESSED, 1000, 0, 300, 200, 1, false, MouseEvent.BUTTON1))
+        val expected = canvas.ghostNode!!.location
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_DRAGGED, 1005, MouseEvent.BUTTON1_DOWN_MASK,
+            360, 240, 0, false, MouseEvent.NOBUTTON))
+        assertEquals(expected, canvas.ghostNode!!.location)
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, 1010, 0, 360, 240, 1, false, MouseEvent.BUTTON1))
+        assertEquals(expected, location)
     }
 
     fun testCreationDragRejectsOutsideMiniMapAndCancelledGesture() {

@@ -1,7 +1,6 @@
 package com.look4counter.queryeditor.sql
 
 import com.intellij.lexer.Lexer
-import com.intellij.openapi.editor.DefaultLanguageHighlighterColors
 import com.intellij.openapi.editor.colors.TextAttributesKey
 import com.intellij.openapi.editor.markup.TextAttributes
 import com.intellij.openapi.fileTypes.SyntaxHighlighterBase
@@ -17,7 +16,7 @@ internal class SqlSyntaxHighlighter : SyntaxHighlighterBase() {
         SqlTokens.NUMBER -> arrayOf(NUMBER)
         SqlTokens.QUOTED -> arrayOf(QUOTED)
         SqlTokens.PARAMETER -> arrayOf(PARAMETER)
-        SqlTokens.COMMENT -> arrayOf(DefaultLanguageHighlighterColors.LINE_COMMENT)
+        SqlTokens.COMMENT -> arrayOf(COMMENT)
         else -> emptyArray()
     }
 
@@ -29,5 +28,6 @@ internal class SqlSyntaxHighlighter : SyntaxHighlighterBase() {
         private val NUMBER = color("GLUE_QUERY_SQL_NUMBER", 0x175BC1, 0x6CA8F5)
         private val QUOTED = color("GLUE_QUERY_SQL_QUOTED", 0x26823B, 0x78C78B)
         private val PARAMETER = color("GLUE_QUERY_SQL_PARAMETER", 0x008B9A, 0x56D4DD)
+        private val COMMENT = color("GLUE_QUERY_SQL_COMMENT", 0x3B7F4C, 0x6A9955)
     }
 }

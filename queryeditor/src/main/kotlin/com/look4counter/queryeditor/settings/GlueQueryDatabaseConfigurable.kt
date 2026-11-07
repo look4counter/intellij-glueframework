@@ -12,14 +12,14 @@ import java.awt.BorderLayout
 import java.util.Locale
 import javax.swing.JComponent
 
-open class GlueQueryEditorConfigurable(private val project: Project) : SearchableConfigurable, Configurable.NoScroll {
+open class GlueQueryDatabaseConfigurable(private val project: Project) : SearchableConfigurable, Configurable.NoScroll {
     private var panel: DataSourceSettingsPanel? = null
     private var component: JComponent? = null
     private var uiDisposable: Disposable? = null
     private val settings get() = DataSourceSettingsService.getInstance(project)
 
-    override fun getId(): String = "com.look4counter.glueframework.queryeditor"
-    override fun getDisplayName(): String = "GlueQueryEditor"
+    override fun getId(): String = "com.look4counter.glueframework.queryeditor.database"
+    override fun getDisplayName(): String = "Database"
     override fun createComponent(): JComponent = component ?: run {
         val lifetime = Disposer.newDisposable("Datasource settings UI")
         uiDisposable = lifetime
@@ -110,7 +110,7 @@ open class GlueQueryEditorConfigurable(private val project: Project) : Searchabl
             }, "DataSource 비밀번호 저장", false, project)
             if (failure != null) throw ConfigurationException("비밀번호를 저장하지 못했습니다. 보안 저장소 상태를 확인하고 다시 적용하세요.")
         }
-        settings.replaceDataSources(definitions)
+        if (definitions != settings.dataSources || passwords.isNotEmpty()) settings.replaceDataSources(definitions)
         panel?.reset(definitions)
     }
 

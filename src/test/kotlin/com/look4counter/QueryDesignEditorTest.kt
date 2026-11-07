@@ -31,6 +31,106 @@ import com.look4counter.queryeditor.QueryCreationDialogs
 import com.look4counter.queryeditor.QueryCreationPanel
 
 class QueryDesignEditorTest : BasePlatformTestCase() {
+    fun testQueryListUsesPlatformSpeedSearchAndSynchronizesSelectionWithoutEditing() {
+        openDesign("<queryMap><query id=\"employee.find\">SELECT 1</query><query id=\"department.list\">SELECT 2</query><query id=\"employee.update\">SELECT 3</query></queryMap>")
+        val supply = com.intellij.ui.speedSearch.SpeedSearchSupply.getSupply(list(), true)
+        assertTrue(supply is com.intellij.ui.ListSpeedSearch<*>)
+        val before = document().text
+        supply!!.findAndSelectElement("DEPARTMENT")
+        drain()
+        assertEquals("department.list", input("id").text)
+        assertEquals("SELECT 2", sql().text)
+        assertEquals(before, document().text)
+        val file = design.file!!
+        WriteCommandAction.runWriteCommandAction(project) { file.isWritable = false }
+        try {
+            supply.findAndSelectElement("employee.update")
+            drain()
+            assertEquals("employee.update", input("id").text)
+            assertEquals(before, document().text)
+        } finally { WriteCommandAction.runWriteCommandAction(project) { file.isWritable = true } }
+        supply.findAndSelectElement("department")
+        drain()
+        supply.findAndSelectElement("noSuchQuery")
+        drain()
+        assertTrue(list().selectedIndex in 0 until list().model.size)
+        assertEquals(list().selectedValue.toString(), input("id").text)
+        assertEquals(before, document().text)
+        assertNull(com.intellij.ui.speedSearch.SpeedSearchSupply.getSupply(input("id"), true))
+        assertNull(com.intellij.ui.speedSearch.SpeedSearchSupply.getSupply(sql(), true))
+        WriteCommandAction.runWriteCommandAction(project) { queries()[1].setAttribute("id", "division.find") }
+        drain()
+        supply.findAndSelectElement("division")
+        drain()
+        assertEquals("division.find", input("id").text)
+        assertEquals(3, list().model.size)
+        WriteCommandAction.runWriteCommandAction(project) { document().setText("<queryMap/>") }
+        drain()
+        supply.findAndSelectElement("employee")
+        assertEquals(-1, list().selectedIndex)
+        assertEquals("<queryMap/>", document().text)
+    }
+    fun testCommentButtonUsesLatestEditsAndSupportsSourceUndo() {
+        val comments = com.look4counter.queryeditor.settings.QueryCommentSettings.getInstance(project)
+        val original = comments.state
+        try {
+            comments.loadState(com.look4counter.queryeditor.settings.QueryCommentState("/* ${'$'}{QUERY_ID} / ${'$'}{QUERY_DESCRIPTION} / ${'$'}{QUERY_RESULT_TYPE} */"))
+            openDesign(XML)
+            val buttons = action("down").parent.components.toList()
+            assertSame(action("comment"), buttons[buttons.indexOf(action("down")) + 1])
+            assertEquals("주석 추가", action("comment").toolTipText)
+            assertEquals("주석 추가", action("comment").accessibleContext.accessibleName)
+            input("id").text = "changed"
+            input("desc").text = "설명 <&]]>"
+            WriteCommandAction.runWriteCommandAction(project) {
+                control<EditorTextField>("query.resultType").document.setText("sample.LatestResult")
+            }
+            WriteCommandAction.runWriteCommandAction(project) { sql().document.setText("SELECT '<&]]>'") }
+            clickAction("comment")
+            assertEquals("/* changed / 설명 <&]]> / sample.LatestResult */\nSELECT '<&]]>'", sql().text)
+            assertEquals(sql().text, sqlOf(queries().first()))
+            checkStructureUndo { clickAction("comment") }
+            val before = document().text
+            comments.loadState(com.look4counter.queryeditor.settings.QueryCommentState(""))
+            clickAction("comment")
+            assertEquals(before, document().text)
+        } finally { comments.loadState(original) }
+    }
+
+    fun testCommentDisabledForEmptyAndNestedQueries() {
+        openDesign("<queryMap><query id=\"nested\">SELECT <include refid=\"other\"/></query></queryMap>")
+        assertFalse(action("comment").isEnabled)
+        WriteCommandAction.runWriteCommandAction(project) { document().setText("<queryMap/>") }
+        drain()
+        assertFalse(action("comment").isEnabled)
+    }
+
+    fun testCommentDeferredSelectionAndReadonlyProtection() {
+        openDesign(XML)
+        val before = document().text
+        inWriteUnsafeContext {
+            action("comment").doClick(0)
+            list().selectedIndex = 1
+        }
+        drain()
+        assertEquals(before, document().text)
+        assertEquals("select 2", sql().text)
+        withoutWriteIntent { action("comment").doClick(0) }
+        assertTrue(sql().text.startsWith("/*"))
+        assertTrue(sql().text.endsWith("select 2"))
+        val file = design.file!!
+        WriteCommandAction.runWriteCommandAction(project) { file.isWritable = false }
+        try {
+            design.selectNotify()
+            drain()
+            assertFalse(action("comment").isEnabled)
+            val readonly = document().text
+            action("comment").doClick(0)
+            drain()
+            assertEquals(readonly, document().text)
+        } finally { WriteCommandAction.runWriteCommandAction(project) { file.isWritable = true } }
+    }
+
     private lateinit var design: FileEditor
 
     private fun openDesign(xml: String): FileEditor {

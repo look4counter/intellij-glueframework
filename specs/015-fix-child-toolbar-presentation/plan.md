@@ -26,3 +26,7 @@ SplitButtonAction 상속을 제거하고 DumbAwareAction과 CustomComponentActio
 
 실제 커스텀 컴포넌트를 CustomComponentAction.COMPONENT_KEY에 등록한 후 실제 update를 반복한다. 수정 전 오류를 재현하고 수정 후 같은 컴포넌트가 유지되는지 검사한다. 두 툴바가 독립적으로 동작하는지, 종류·프리셋·선택·읽기 전용 상태 및 직접 토글 위임을 검사한다. 기존 속성·생성 추적·새로고침·Snap·Service 직접 편집 회귀를 실행한다. 검증 시작 시점 이후 IDE 로그에서 해당 오류가 없는지 확인하고 설치용 ZIP의 변경 클래스를 검사한다.
 
+## 후속 문구 변경 계획
+
+ChildCreationToolbar.kt의 Activity label, toggleAction의 동적 description, 종류 메뉴·선택 액션 및 네 버튼의 description을 요청 문자열로 바꾼다. 컴포넌트·생성·토글 로직은 유지한다. ChildCreationToolbarTest.kt의 기존 기본 이름 기대를 갱신하고 기존 액션 갱신 검증에서 안내 문구를 확인한다. 해당 툴바와 속성 회귀 및 설치 ZIP·구조 검사를 수행한다. 새로운 테스트 클래스나 의존성·저장 상태는 추가하지 않는다. 헌장은 미작성 템플릿이고 확장 훅은 없다.
+

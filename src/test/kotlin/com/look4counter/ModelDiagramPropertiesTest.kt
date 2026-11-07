@@ -259,6 +259,13 @@ class ModelDiagramPropertiesTest : BasePlatformTestCase() {
 
     fun testWireCreationPersistsBothReferencesAndSingleUndoRedo() {
         val session = open()
+        session.editor.component.setSize(640, 480)
+        session.editor.component.doLayout()
+        val scroll = session.editor.component.components.filterIsInstance<JScrollPane>().single()
+        scroll.doLayout()
+        scroll.viewport.doLayout()
+        assertTrue(session.canvas.visibleRect.contains(70, 55))
+        assertTrue(session.canvas.visibleRect.contains(270, 55))
         val original = session.document.text
         performCreationAction(session.kind.wireCreationAction)
         assertTrue(session.canvas.wireCreationMode)
@@ -840,7 +847,7 @@ class ModelDiagramPropertiesTest : BasePlatformTestCase() {
         assertEquals(DiagramNodeKind.FinalState, session.kind.selectedKind)
         assertEquals("FinalState", creationPresentation(session).text)
         assertNull(creationPresentation(session).icon)
-        assertEquals(listOf("빈 Activity", "InitialState", "FinalState"), session.kind.kindActions.map { it.templatePresentation.text })
+        assertEquals(listOf("Empty Activity", "InitialState", "FinalState"), session.kind.kindActions.map { it.templatePresentation.text })
         val menuEvent = AnActionEvent.createFromAnAction(session.kind.kindActions[2], null, ActionPlaces.UNKNOWN, DataContext.EMPTY_CONTEXT)
         session.kind.kindActions[2].update(menuEvent)
         assertEquals(com.intellij.openapi.actionSystem.KeepPopupOnPerform.Never, menuEvent.presentation.keepPopupOnPerform)

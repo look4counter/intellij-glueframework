@@ -192,3 +192,7 @@ ELK JAR 다운로드 뒤에도 runIde 플러그인의 lib에는 프로젝트 합
 ## 포트 공유와 표시 경로 조사
 
 이전 ELK 구현은 노드별 중앙 포트를 모든 연결이 공유하여 mergeEdges=false만으로 도형 근처의 겹침을 없앨 수 없었다. 연결별 고정 포트, Activity 포트 공간, edge/port 간격을 적용한다. 별도 접점을 원래 중심 기반 렌더링으로 다시 합치지 않도록 서비스 자동 wire만 메모리 정책으로 구분한다. 단일 점 교차와 양의 길이를 공유하는 선분은 별도로 검증한다.
+
+## 추가 위치 선택 조사 (2026-11-08)
+
+Child는 기존 creationPressPoint를 보존하지만 release에서 실제 좌표를 덮어쓰고 있었다. Wire는 press 여부만 저장하고 release 좌표로 대상을 다시 선택했다. 공통 Canvas에서 press 좌표를 유지하면 저장 계층이나 생성 콜백 변경 없이 Activity 및 Wire에 같은 규칙을 적용할 수 있다. 확정은 release에 유지하여 Esc·모드 전환·Source 갱신 취소 경로를 재사용한다.

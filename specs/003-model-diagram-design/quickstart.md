@@ -371,3 +371,38 @@ Undo/Redo 뒤 Design을 다시 읽어 요소 색상과 Commit 가능 상태를 �
 ## Magnetic·Properties 아이콘 제거 (2026-10-24)
 
 `Magnetic`과 `Properties` 툴바 액션은 아이콘 없이 텍스트만 표시한다. `:modeleditor:compileKotlin`과 `:buildPlugin -x :buildSearchableOptions`가 성공했고, `git diff --check`도 통과했다. UI 수동 확인과 테스트는 실행하지 않았다.
+## 처음 누른 위치에서 Activity와 Wire 추가 검증 (2026-11-08)
+
+Activity를 포함한 Child는 press 위치에 미리보기를 고정하고 release 시 그 위치에 한 번 생성한다. Wire의 시작점과 끝점도 각각 press한 Child와 접점을 사용한다. 캔버스 안의 다른 Child 또는 빈 공간에서 놓아도 처음 위치를 사용하며, 화면 밖·미니맵 release와 취소·모드 전환·문서 갱신·읽기 전용 보호는 유지한다. 생성 확정 시점은 release이다.
+
+명세 → 명확화 → 계획 → 작업 목록 → 구현 전 분석 → 구현 → 수렴 점검 순서로 기존 산출물을 갱신했다. 분석에서 FR-234~FR-236은 T250~T252로 모두 대응하며 미해결 질문과 이번 변경 내 충돌은 없다. 과거 FR-156의 드래그 거부 규칙은 최신 요구사항으로 대체했다. 수렴 점검은 이번 US81의 요구사항 3개, 계획의 위치 보존·미리보기·경계 보호 결정 및 작업 3개를 대조했으며 추가 구현 누락은 없었다. 기존 전체 기능을 다시 감사한 결과는 아니다.
+
+로컬 Gradle 9.7.1과 IDEA SDK의 JBR 21을 사용했다. 기본 wrapper는 네트워크 제한으로 배포본을 받지 못했고 오프라인 의존성 메타데이터도 해석되지 않아, 로컬 캐시의 ELK·전이 의존성을 .gradle-validation/press-position-maven에 복사한 임시 Maven 저장소와 press-position.init.gradle로 검증했다. 프로젝트의 의존성 설정은 변경하지 않았다. Spec Kit의 PowerShell 보조 스크립트는 실행 정책으로 차단되어 산출물 경로와 전제 조건을 직접 확인했다.
+
+`test --offline --no-configuration-cache -I .gradle-validation/press-position.init.gradle`에 ModelEditorCreationTraceTest, ModelDiagramWireCreationTest, ModelEditorRefreshTest, ModelDiagramZoomTest, ModelEditorFeaturesTest 필터를 적용했다. 메인·테스트 컴파일과 테스트 47개가 실패·오류·건너뜀 없이 통과했다. 근거는 .gradle-validation/press-position-tests.log와 build/test-results/test의 해당 XML이다. `git diff --check`도 통과했다. 실제 사용자 IDE 수동 조작과 배포 ZIP 생성은 수행하지 않았다.
+
+## 모델 툴바 아이콘 검증 (2026-11-08)
+
+Snap에는 기존 자석 아이콘을, Orthogonal에는 양 끝 점이 있는 직각 연결선 아이콘을 연결했다. Properties는 queryeditor 주석 추가 버튼과 동일한 AllIcons.Actions.Annotate를 사용한다. 기존 라벨·설명·ToggleAction 상태 및 Properties 콜백·활성화 조건은 유지한다. 자석과 직각 연결선의 밝은·어두운 테마 SVG 4개가 모두 16×16이고 XML 파싱 및 리소스 참조가 정상임을 확인했다.
+
+명세·명확화·계획·작업 생성과 구현 전 분석을 수행했다. FR-237~FR-239는 T253~T255에 모두 대응하며 US80의 이전 아이콘 제거 결정을 최신 요청으로 대체했다. 체크리스트는 모두 완료 상태이고 중요한 미해결 질문은 없다. 구현 후 speckit-converge 대조에서 이번 US82 요구사항 3개와 리소스 재사용·테마 대응·기존 동작 유지 계획에 누락이 없어 추가 작업은 생성하지 않았다.
+
+이전 검증과 같은 로컬 Gradle 9.7.1·JBR 21 및 임시 오프라인 Maven 저장소로 `:modeleditor:compileKotlin test --offline --no-configuration-cache -I .gradle-validation/press-position.init.gradle --tests com.look4counter.ModelSnapSettingsTest --tests com.look4counter.OrthogonalWireSnapTest`를 실행했다. 컴파일과 테스트 12개가 실패·오류·건너뜀 없이 통과했다. 근거는 .gradle-validation/model-toolbar-icons.log와 해당 build/test-results/test XML이다. `git diff --check`도 통과했다. 실제 IDE에서 두 테마의 시각적 배치는 수동 확인하지 않았다.
+
+## Activity·Wire 추가 아이콘 검증 (2026-11-08)
+
+Activity 추가 버튼에 둥근 사각형과 더하기 아이콘을 연결하고 update에서도 유지한다. Wire 추가는 두 끝점이 있는 대각선과 더하기 아이콘을 사용한다. 기존 텍스트·프리셋 이름·드롭다운·토글과 콜백은 유지했다. 새 SVG 4개의 XML 파싱, 16×16 크기와 밝은·어두운 테마 쌍 및 참조 경로를 확인했다.
+
+명세·명확화·계획·작업 목록을 갱신하고 구현 전 분석에서 FR-240~FR-242가 T256~T258로 모두 대응함을 확인했다. 검증 중 ModelActivityCreationTest에서 이전 생성 위치 변경의 경계 문제가 확인되어 계획과 T259를 추가했다. viewport의 visibleRect가 비면 기존 updateCreationPoint와 같은 컴포넌트 크기 경계를 사용하도록 Child·Wire release를 보완했다. 처음 실행은 30개 중 1개가 실패했고, 보완 뒤 생성 관련 5개 테스트 클래스를 재실행해 41개가 실패·오류·건너뜀 없이 통과했다.
+
+이전과 같은 로컬 Gradle 9.7.1·JBR 21 및 임시 오프라인 Maven 저장소로 `:modeleditor:compileKotlin test --offline --no-configuration-cache -I .gradle-validation/press-position.init.gradle`를 실행했다. 테스트 필터는 ModelActivityCreationTest, ModelDiagramWireCreationTest, ModelEditorFeaturesTest, ModelEditorCreationTraceTest, ModelDiagramZoomTest이다. 근거는 .gradle-validation/model-add-icons.log와 build/test-results/test의 해당 XML이다. `git diff --check`도 통과했다.
+
+구현 후 speckit-converge로 이번 US83 요구사항 3개 및 US81의 경계 보완, 계획과 작업을 대조했다. 추가 구현 누락이 없어 수렴 작업을 추가하지 않았다. 실제 IDE의 두 테마에서 시각적 배치는 수동 확인하지 않았으며 배포 ZIP은 생성하지 않았다.
+
+## 모델 캔버스 단축키 검증 (2026-11-08)
+
+모델 캔버스에 수정 키 없는 a/w/s/o/p 단축키를 등록했다. 각각 Activity 추가·Wire 추가·Snap·Orthogonal·Properties 버튼과 같은 상태 전환 또는 실행 경로를 사용한다. Activity 키는 선택 종류가 State이면 Activity로 전환하고 기존 Activity 프리셋은 유지한다. 각 버튼의 description은 Activity 추가 (a), Wire 추가 (w), 정렬 토글 (s), 직각 Wire 토글 (o), 파일 속성 (p)이다. 전역·Source·속성 입력에는 키를 등록하지 않는다.
+
+명세·명확화·계획·작업 생성·구현 전 분석을 수행했으며 FR-243~FR-245는 T260~T262에 대응하고 중요한 미해결 질문은 없다. 새 테스트가 단축키 없는 기존 구현에서 실패함을 확인한 뒤 구현했다. 구현 후 대조에서 등록 범위·기존 버튼 보호·프리셋·모드 전환과 툴팁 요구에 누락은 없었다.
+
+이전과 같은 로컬 Gradle 9.7.1·JBR 21·임시 오프라인 저장소를 사용한 .gradle-validation/shortcuts-query-search.log의 통합 실행에서 모델 관련 43개가 모두 통과했다. 대상은 ModelEditorFeaturesTest 16개, ModelActivityCreationTest 6개, ModelDiagramWireCreationTest 9개, ModelSnapSettingsTest 4개, OrthogonalWireSnapTest 8개이다. 이 실행의 유일한 실패는 QueryDesignEditorTest의 검색 테스트에서 팝업 비활성 공급자 조회를 활성 공급자 API로 검사한 부분이며, 조회 방식과 기본 검색의 무일치 선택 기대를 고친 뒤 해당 클래스 37개가 재실행에서 모두 통과했다. 실제 키보드 포커스·툴팁 UI 조작은 사용자 IDE에서 수동 확인하지 않았다. Kotlin 컴파일과 git diff --check는 통과했다.

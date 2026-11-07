@@ -11,6 +11,78 @@ import org.jdom.Element
 import java.io.StringReader
 
 class ModelEditorServiceExportTest : BasePlatformTestCase() {
+    fun testModelSaveCompletesWhileUnsavedServiceRemainsUntouched() {
+        val source = myFixture.addFileToProject("save-conflict.glue_uml_ad", wireModel()).virtualFile
+        val target = myFixture.addFileToProject("services/save-conflict-service.xml", "<!-- disk -->").virtualFile
+        ModelEditorSettings.getInstance(project).loadState(ModelEditorState(serviceDirectory = "services"))
+        val manager = FileDocumentManager.getInstance()
+        val sourceDocument = manager.getDocument(source)!!
+        val outputDocument = manager.getDocument(target)!!
+        WriteCommandAction.runWriteCommandAction(project) {
+            outputDocument.setText("<!-- unsaved service -->")
+            sourceDocument.insertString(sourceDocument.textLength, "\n")
+        }
+        manager.saveDocument(sourceDocument)
+        assertFalse(manager.isDocumentUnsaved(sourceDocument))
+        assertEquals(sourceDocument.text, VfsUtil.loadText(source).replace("\r\n", "\n"))
+        assertEquals("<!-- unsaved service -->", outputDocument.text)
+        assertTrue(manager.isDocumentUnsaved(outputDocument))
+        assertEquals("<!-- disk -->", VfsUtil.loadText(target))
+    }
+
+    fun testAutomaticExportPreservesUnsavedOutputEvenWhenGeneratedTextMatches() {
+        val text = wireModel()
+        val source = myFixture.addFileToProject("protected.glue_uml_ad", text).virtualFile
+        val target = myFixture.addFileToProject("services/protected-service.xml", "<!-- saved -->").virtualFile
+        ModelEditorSettings.getInstance(project).loadState(ModelEditorState(serviceDirectory = "services"))
+        val manager = FileDocumentManager.getInstance()
+        val document = manager.getDocument(target)!!
+        val generated = ModelServiceXmlExporter.export(
+            PsiFileFactory.getInstance(project).createFileFromText(source.name, GlueUmlAdFileType.INSTANCE, text) as XmlFile,
+            source.nameWithoutExtension)
+        for (draft in listOf("<!-- manual draft -->", generated)) {
+            WriteCommandAction.runWriteCommandAction(project) { document.setText(draft) }
+            assertTrue(manager.isDocumentUnsaved(document))
+            try {
+                ModelServiceSaveListener().save(project, source, text)
+                fail("미저장 출력은 생성 결과와 같아도 자동 저장하면 안 됩니다.")
+            } catch (error: IllegalArgumentException) {
+                assertTrue(error.message.orEmpty().contains("저장하지 않은"))
+            }
+            assertEquals(draft, document.text)
+            assertEquals("<!-- saved -->", VfsUtil.loadText(target))
+            assertTrue(manager.isDocumentUnsaved(document))
+        }
+        manager.saveDocument(document)
+        assertEquals(target, ModelServiceSaveListener().save(project, source, text))
+        assertFalse(manager.isDocumentUnsaved(document))
+        assertEquals(generated, VfsUtil.loadText(target).replace("\r\n", "\n"))
+    }
+
+    fun testAutomaticExportRejectsReadOnlyDocumentAndAllowsRetry() {
+        val text = wireModel()
+        val source = myFixture.addFileToProject("readonly.glue_uml_ad", text).virtualFile
+        val target = myFixture.addFileToProject("services/readonly-service.xml", "<!-- keep -->").virtualFile
+        ModelEditorSettings.getInstance(project).loadState(ModelEditorState(serviceDirectory = "services"))
+        val manager = FileDocumentManager.getInstance()
+        val document = manager.getDocument(target)!!
+        document.setReadOnly(true)
+        try {
+            try {
+                ModelServiceSaveListener().save(project, source, text)
+                fail("읽기 전용 문서는 생성 대상에서 제외해야 합니다.")
+            } catch (error: IllegalArgumentException) {
+                assertTrue(error.message.orEmpty().contains("읽기 전용"))
+            }
+            assertEquals("<!-- keep -->", document.text)
+            assertEquals("<!-- keep -->", VfsUtil.loadText(target))
+            assertFalse(manager.isDocumentUnsaved(document))
+        } finally { document.setReadOnly(false) }
+        assertEquals(target, ModelServiceSaveListener().save(project, source, text))
+        assertEquals("readonly-service", parse(document.text).getAttributeValue("name"))
+        assertEquals(document.text, VfsUtil.loadText(target).replace("\r\n", "\n"))
+    }
+
     private lateinit var previous: ModelEditorState
     override fun setUp() {
         super.setUp()

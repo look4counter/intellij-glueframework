@@ -41,3 +41,11 @@ T001 → T002 → T003 → T004 → T005 → T006 → T007 순서다. 추가가 
 - [x] T013 specs/010-query-list-actions/quickstart.md에 검증 결과를 기록하고 ZIP과 명세·구현 일치를 확인한다.
 
 추가 의존성: T011 → T012 → T013 순서다.
+
+## 단계 8: 쿼리 ID 기본 빠른 검색
+
+- [x] T014 [US3] src/test/kotlin/com/look4counter/QueryDesignEditorTest.kt에 실제 목록의 플랫폼 Speed Search 등록·ID 검색·선택 동기화·문서 비변경·ID 갱신·빈 목록 회귀를 작성한다. FR-007~FR-009.
+- [x] T015 [US3] queryeditor/src/main/kotlin/com/look4counter/queryeditor/QueryDesignEditor.kt의 쿼리 JBList에 ListSpeedSearch.installOn을 연결하고 기존 renderer·선택·입력 처리를 유지한다. FR-007~FR-009.
+- [x] T016 관련 QueryEditor 회귀를 실행하고 specs/010-query-list-actions/quickstart.md에 결과를 기록한 뒤 speckit-converge로 이번 범위를 대조한다. FR-007~FR-009.
+
+T014 → T015 → T016 순서로 수행한다. 실제 목록을 기준으로 독립 검증하며 다른 입력 컴포넌트에는 검색을 등록하지 않는다.

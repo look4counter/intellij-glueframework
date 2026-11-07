@@ -23,6 +23,7 @@ import com.intellij.psi.SmartPsiElementPointer
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.xml.XmlTag
 import com.intellij.ui.OnePixelSplitter
+import com.intellij.ui.ListSpeedSearch
 import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBLabel
 import com.intellij.ui.components.JBList
@@ -31,6 +32,13 @@ import com.intellij.ui.components.JBScrollPane
 import com.intellij.ui.components.JBTextField
 import com.intellij.util.ui.JBUI
 import com.look4counter.queryeditor.sql.SqlDocuments
+import com.look4counter.queryeditor.sql.SqlFormatter
+import com.intellij.openapi.actionSystem.ActionManager
+import com.intellij.openapi.actionSystem.ActionUpdateThread
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.CustomShortcutSet
+import com.intellij.openapi.actionSystem.IdeActions
+import com.intellij.openapi.project.DumbAwareAction
 import java.awt.BorderLayout
 import java.awt.Dimension
 import java.awt.Component
@@ -59,6 +67,7 @@ internal class QueryDesignEditor(private val project: Project, private val file:
         name = "query.list"
         selectionMode = ListSelectionModel.SINGLE_SELECTION
         accessibleContext.accessibleName = "쿼리 id 목록"
+        ListSpeedSearch.installOn(this)
         cellRenderer = object : DefaultListCellRenderer() {
             override fun getListCellRendererComponent(list: JList<*>, value: Any?, index: Int, selected: Boolean, focused: Boolean): Component {
                 super.getListCellRendererComponent(list, value, index, selected, focused)
@@ -93,6 +102,16 @@ internal class QueryDesignEditor(private val project: Project, private val file:
     private val fields = listOf("id", "desc").associateWith { attribute ->
         JBTextField().apply { name = "query.$attribute" }
     }
+    private val commentButton = JButton(AllIcons.Actions.Annotate).apply {
+        name = "query.action.comment"
+        toolTipText = "주석 추가"
+        accessibleContext.accessibleName = "주석 추가"
+        preferredSize = JBUI.size(32, 32)
+        minimumSize = preferredSize
+        margin = JBUI.insets(4)
+        isEnabled = false
+        addActionListener { insertComment() }
+    }
     private val resultType = QueryResultTypeEditor(project, fields.getValue("id"))
     private val named = JBCheckBox().apply {
         name = "query.isNamed"
@@ -101,6 +120,13 @@ internal class QueryDesignEditor(private val project: Project, private val file:
     }
     private val emptyDocument = EditorFactory.getInstance().createDocument("")
     private val sqlEditor = QuerySqlEditor(project, emptyDocument)
+    private val columnTrace = QueryColumnTracePanel(project, sqlEditor)
+    private var formatEnabled = false
+    private val formatAction = object : DumbAwareAction("SQL 포맷") {
+        override fun getActionUpdateThread() = ActionUpdateThread.EDT
+        override fun update(event: AnActionEvent) { event.presentation.isEnabled = !disposed && formatEnabled }
+        override fun actionPerformed(event: AnActionEvent) = formatSql()
+    }
     private val splitter = OnePixelSplitter(false, "glue.query.design.splitter", 0.70f)
     private val panel = JBPanel<JBPanel<*>>(BorderLayout())
     private val buffers = mutableListOf<SqlBuffer>()
@@ -122,12 +148,16 @@ internal class QueryDesignEditor(private val project: Project, private val file:
 
     init {
         sqlEditor.setDisposedWith(this)
+        Disposer.register(this, columnTrace)
         resultType.setDisposedWith(this)
         sqlEditor.minimumSize = JBUI.size(240, 100)
         val sidebar = createSidebar()
         splitter.name = "query.splitter"
         splitter.setHonorComponentsMinimumSize(true)
         splitter.firstComponent = sqlEditor
+        val formatShortcuts = ActionManager.getInstance().getAction(IdeActions.ACTION_EDITOR_REFORMAT)?.shortcutSet
+            ?: CustomShortcutSet.fromString("ctrl alt L")
+        formatAction.registerCustomShortcutSet(formatShortcuts, sqlEditor, this)
         splitter.secondComponent = sidebar
         Disposer.register(this) { splitter.dispose() }
         panel.preferredSize = JBUI.size(1066, 600)
@@ -233,9 +263,11 @@ internal class QueryDesignEditor(private val project: Project, private val file:
                 add(JBPanel<JBPanel<*>>(FlowLayout(FlowLayout.LEFT, 0, 0)).apply {
                     name = "query.actions"
                     listButtons.values.forEach(::add)
+                    add(commentButton)
                 }, BorderLayout.NORTH)
                 add(JBScrollPane(queryList), BorderLayout.CENTER)
             }, BorderLayout.CENTER)
+            add(columnTrace, BorderLayout.SOUTH)
         }
     }
 
@@ -244,6 +276,78 @@ internal class QueryDesignEditor(private val project: Project, private val file:
         val index = pending.indexOfFirst { it.target == edit.target && it.attribute == edit.attribute }
         if (index < 0) pending.add(edit) else pending[index] = edit.copy(original = pending[index].original)
         scheduleRefresh()
+    }
+
+    private fun formatSql(target: SmartPsiElementPointer<XmlTag>? = selected?.target, revision: Long = selectionRevision,
+                          range: IntRange? = sqlEditor.editor?.takeUnless { it.isDisposed }?.selectionModel?.takeIf { it.hasSelection() }?.let { it.selectionStart until it.selectionEnd },
+                          bufferStamp: Long = sqlEditor.document.modificationStamp) {
+        if (disposed || project.isDisposed || target == null || revision != selectionRevision) return
+        val application = ApplicationManager.getApplication()
+        val guard = TransactionGuard.getInstance()
+        if (!application.isDispatchThread || !application.isWriteIntentLockAcquired || !guard.isWritingAllowed) {
+            val requested = ModalityState.defaultModalityState()
+            application.invokeLater({ formatSql(target, revision, range, bufferStamp) },
+                if (guard.isWriteSafeModality(requested)) requested else ModalityState.nonModal())
+            return
+        }
+        if (!file.isValid || selected?.target?.element != target.element || !model.writable) return
+        if (range != null && sqlEditor.document.modificationStamp != bufferStamp) return
+        flushPending()
+        if (notice != null) { refresh(target); return }
+        PsiDocumentManager.getInstance(project).commitDocument(model.document)
+        val snapshot = model.snapshot()
+        if (snapshot.problem != null || !model.writable) return
+        val query = snapshot.queries.firstOrNull { it.target.element == target.element } ?: return
+        if (!query.sqlEditable) return
+        if (range != null && (range.first < 0 || range.last >= query.sql.length || query.sql != sqlEditor.document.text)) return
+        val options = com.look4counter.queryeditor.settings.QueryFormattingSettings.getInstance(project).options
+        val result = if (range == null) SqlFormatter.format(query.sql, options) else SqlFormatter.formatSelection(query.sql, range.first, range.last + 1, options)
+        if (result.problem != null) {
+            notice = result.problem
+            refresh(target)
+            return
+        }
+        val replacement = result.sql ?: return
+        val formatted = if (range == null) replacement else query.sql.replaceRange(range.first, range.last + 1, replacement)
+        if (formatted == query.sql) return
+        applying = true
+        try {
+            if (!model.apply(listOf(QueryEdit(query.target, null, query.sql, formatted)))) {
+                notice = "수정 대상을 확인할 수 없습니다. Source의 최신 내용을 확인하세요."
+            }
+        } finally { applying = false }
+        refresh(target)
+    }
+
+    private fun insertComment(target: SmartPsiElementPointer<XmlTag>? = selected?.target,
+                              revision: Long = selectionRevision) {
+        if (disposed || project.isDisposed || target == null || revision != selectionRevision) return
+        val application = ApplicationManager.getApplication()
+        val guard = TransactionGuard.getInstance()
+        if (!application.isDispatchThread || !application.isWriteIntentLockAcquired || !guard.isWritingAllowed) {
+            val requested = ModalityState.defaultModalityState()
+            application.invokeLater({ insertComment(target, revision) },
+                if (guard.isWriteSafeModality(requested)) requested else ModalityState.nonModal())
+            return
+        }
+        if (!file.isValid || selected?.target?.element != target.element || !model.writable) return
+        flushPending()
+        if (notice != null) { refresh(target); return }
+        PsiDocumentManager.getInstance(project).commitDocument(model.document)
+        val snapshot = model.snapshot()
+        if (snapshot.problem != null || !model.writable) return
+        val query = snapshot.queries.firstOrNull { it.target.element == target.element } ?: return
+        if (!query.sqlEditable) return
+        val template = com.look4counter.queryeditor.settings.QueryCommentSettings.getInstance(project).state.template
+        val replacement = QueryCommentTemplate.prepend(template, query.sql, query.id, query.description, resultType = query.resultType)
+        if (replacement == query.sql) return
+        applying = true
+        try {
+            if (!model.apply(listOf(QueryEdit(query.target, null, query.sql, replacement)))) {
+                notice = "수정 대상을 확인할 수 없습니다. Source의 최신 내용을 확인하세요."
+            }
+        } finally { applying = false }
+        refresh(target)
     }
 
     private fun performListAction(action: QueryListAction, target: SmartPsiElementPointer<XmlTag>?) {
@@ -369,6 +473,9 @@ internal class QueryDesignEditor(private val project: Project, private val file:
                 moveSqlCaret(buffer.caretOffset)
             }
             sqlEditor.setViewer(!editable || !query.sqlEditable)
+            formatEnabled = editable && query.sqlEditable
+            commentButton.isEnabled = formatEnabled
+            columnTrace.refresh()
             status.text = snapshot.problem ?: notice ?: when {
                 snapshot.queries.isEmpty() -> "queryMap에 query가 없습니다."
                 !model.writable -> "읽기 전용 파일입니다."

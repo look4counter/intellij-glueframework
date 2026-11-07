@@ -171,3 +171,7 @@ ServiceDiagramPlacement에 실제 edge section 순서의 routes를 추가한다.
 ## 분리된 자동 접점 모델
 
 ServiceDiagramPlacement.widths는 포트 수를 고려한 실제 폭이다. DiagramWire.explicitContacts는 기본 false이며 서비스 자동 wire의 XmlTag userData에만 true를 둔다. 접점 정책을 XML 속성으로 기록하지 않는다. 그룹 이동은 유지하고 한쪽 이동/resize/재연결은 정책을 해제한다.
+
+## 추가 입력의 임시 위치
+
+Child 생성 제스처는 처음 누른 화면 위치와 생성 모드 세대를 유지한다. Wire 생성 제스처는 각 선택에서 처음 누른 화면 위치를 유지하고 release 또는 취소 때 해제한다. 좌표는 기존 변환·스냅 경로로 모델 좌표에 반영하며 XML 또는 프로젝트 설정에 새로운 상태를 저장하지 않는다.

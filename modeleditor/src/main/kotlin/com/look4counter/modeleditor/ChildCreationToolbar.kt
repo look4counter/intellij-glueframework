@@ -10,12 +10,16 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.DefaultActionGroup
 import com.intellij.openapi.actionSystem.Presentation
 import com.intellij.openapi.actionSystem.ToggleAction
+import com.intellij.openapi.actionSystem.CustomShortcutSet
 import com.intellij.openapi.actionSystem.ex.CustomComponentAction
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.DumbAwareAction
+import com.intellij.openapi.util.IconLoader
 import java.awt.BorderLayout
+import java.awt.event.KeyEvent
 import javax.swing.JComponent
 import javax.swing.JPanel
+import javax.swing.KeyStroke
 
 class ChildCreationToolbar(
     target: JComponent,
@@ -53,7 +57,9 @@ class ChildCreationToolbar(
             refresh()
         }
 
-    val toggleAction: ToggleAction = object : ToggleAction(), DumbAware {
+    private val activityAddIcon = IconLoader.getIcon("/icons/activity-add.svg", ChildCreationToolbar::class.java)
+
+    val toggleAction: ToggleAction = object : ToggleAction("Activity", "Activity 추가 (a)", activityAddIcon), DumbAware {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
         override fun isSelected(event: AnActionEvent) = isActive()
         override fun setSelected(event: AnActionEvent, selected: Boolean) {
@@ -65,15 +71,15 @@ class ChildCreationToolbar(
         override fun update(event: AnActionEvent) {
             super.update(event)
             event.presentation.text = selectedPreset?.name ?: label(selectedKind)
-            event.presentation.description = "${label(selectedKind)} 추가 모드 켜기/끄기 · 화살표: 종류 선택"
-            event.presentation.icon = null
+            event.presentation.description = "Activity 추가 (a)"
+            event.presentation.icon = activityAddIcon
             event.presentation.putClientProperty(com.intellij.openapi.actionSystem.ex.ActionUtil.SHOW_TEXT_IN_TOOLBAR, true)
             event.presentation.isEnabled = canEdit()
         }
     }
 
     val kindActions: List<ToggleAction> = allowedKinds.map { kind ->
-        object : ToggleAction(label(kind), "추가할 Child 종류 선택", icon(kind)), DumbAware {
+        object : ToggleAction(label(kind), "Activity 선택", icon(kind)), DumbAware {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun isSelected(event: AnActionEvent) = selectedKind == kind && selectedPreset == null
             override fun setSelected(event: AnActionEvent, selected: Boolean) {
@@ -98,7 +104,7 @@ class ChildCreationToolbar(
         override fun getChildren(event: AnActionEvent?): Array<AnAction> {
             val registered = presets()
             val choices = registered.map { preset ->
-                object : ToggleAction(preset.name, "프리셋 Activity 선택", AllIcons.Nodes.Class), DumbAware {
+                object : ToggleAction(preset.name, "Activity 선택", AllIcons.Nodes.Class), DumbAware {
                     override fun getActionUpdateThread() = ActionUpdateThread.EDT
                     override fun isSelected(event: AnActionEvent) = selectedPreset == preset
                     override fun setSelected(event: AnActionEvent, selected: Boolean) { if (canEdit()) selectPreset(preset) }
@@ -142,7 +148,7 @@ class ChildCreationToolbar(
     }
 
     val splitAction = CreationControlAction(kindGroup, toggleAction) {
-        val menu = object : com.intellij.openapi.project.DumbAwareAction("종류 선택", "추가할 Child 선택", AllIcons.General.ArrowDown) {
+        val menu = object : com.intellij.openapi.project.DumbAwareAction("Activity 선택", "Activity 선택", AllIcons.General.ArrowDown) {
             override fun getActionUpdateThread() = ActionUpdateThread.EDT
             override fun update(event: AnActionEvent) { event.presentation.isEnabled = canEdit() }
             override fun actionPerformed(event: AnActionEvent) {
@@ -167,7 +173,8 @@ class ChildCreationToolbar(
         }.component
     }
 
-    val snapAction: ToggleAction = object : ToggleAction("Snap", "Wire 접점과 Child 이동·크기 조절의 보조선 및 정렬 붙이기", null), DumbAware {
+    val snapAction: ToggleAction = object : ToggleAction("Snap", "정렬 토글 (s)",
+        IconLoader.getIcon("/icons/magnet.svg", ChildCreationToolbar::class.java)), DumbAware {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
         override fun isSelected(event: AnActionEvent) = snapState()
         override fun setSelected(event: AnActionEvent, selected: Boolean) { onSnapChanged(selected); refresh() }
@@ -178,7 +185,7 @@ class ChildCreationToolbar(
         }
     }
     val orthogonalAction: ToggleAction = object : ToggleAction("Orthogonal",
-        "Wire 핸들을 수평·수직 위치에 자석처럼 붙이기 (Alt: 임시 해제)", null), DumbAware {
+        "직각 Wire 토글 (o)", IconLoader.getIcon("/icons/orthogonal.svg", ChildCreationToolbar::class.java)), DumbAware {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
         override fun isSelected(event: AnActionEvent) = orthogonalState()
         override fun setSelected(event: AnActionEvent, selected: Boolean) { onOrthogonalChanged(selected); refresh() }
@@ -188,7 +195,7 @@ class ChildCreationToolbar(
         }
     }
     val diagramPropertiesAction: AnAction = object : com.intellij.openapi.project.DumbAwareAction(
-        "Properties", "GlueDiagram Properties와 Description 편집", null) {
+        "Properties", "파일 속성 (p)", AllIcons.Actions.Annotate) {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
         override fun update(event: AnActionEvent) {
             event.presentation.text = "Properties"
@@ -197,7 +204,8 @@ class ChildCreationToolbar(
         }
         override fun actionPerformed(event: AnActionEvent) { if (canEditProperties()) onDiagramProperties() }
     }
-    val wireCreationAction: ToggleAction = object : ToggleAction("Wire", "시작 Child와 끝 Child를 클릭해 Wire 추가", null), DumbAware {
+    val wireCreationAction: ToggleAction = object : ToggleAction("Wire", "Wire 추가 (w)",
+        IconLoader.getIcon("/icons/wire-add.svg", ChildCreationToolbar::class.java)), DumbAware {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
         override fun isSelected(event: AnActionEvent) = wireCreationState()
         override fun setSelected(event: AnActionEvent, selected: Boolean) { if (canEdit()) onWireCreationChanged(selected); refresh() }
@@ -242,6 +250,25 @@ class ChildCreationToolbar(
     init {
         name = "model.child.creationToolbar"
         add(toolbar.component, BorderLayout.CENTER)
+        fun shortcut(key: Int, button: AnAction, perform: (AnActionEvent) -> Unit = button::actionPerformed) {
+            object : DumbAwareAction(button.templatePresentation.text) {
+                override fun getActionUpdateThread() = ActionUpdateThread.EDT
+                override fun update(event: AnActionEvent) = button.update(event)
+                override fun actionPerformed(event: AnActionEvent) {
+                    button.update(event)
+                    if (event.presentation.isEnabled) perform(event)
+                }
+            }.registerCustomShortcutSet(CustomShortcutSet(KeyStroke.getKeyStroke(key, 0)), target)
+        }
+        shortcut(KeyEvent.VK_A, toggleAction) { event ->
+            val active = isActive() && selectedKind == DiagramNodeKind.Activity
+            if (selectedKind != DiagramNodeKind.Activity) selectedKind = DiagramNodeKind.Activity
+            toggleAction.setSelected(event, !active)
+        }
+        shortcut(KeyEvent.VK_W, wireCreationAction)
+        shortcut(KeyEvent.VK_S, snapAction)
+        shortcut(KeyEvent.VK_O, orthogonalAction)
+        shortcut(KeyEvent.VK_P, diagramPropertiesAction)
         refresh()
     }
 
@@ -250,7 +277,7 @@ class ChildCreationToolbar(
     }
 
     private fun label(kind: DiagramNodeKind) = when (kind) {
-        DiagramNodeKind.Activity -> "빈 Activity"
+        DiagramNodeKind.Activity -> "Empty Activity"
         DiagramNodeKind.InitialState -> "InitialState"
         DiagramNodeKind.FinalState -> "FinalState"
     }

@@ -269,7 +269,7 @@ ModelDesignEditorProvider.kt의 생성 콜백을 enqueueChildCreation에 연결�
 
 ## Phase 53: 미세 이동 클릭 생성 보정
 
-Child 추가는 운영체제가 click 이벤트를 생성하는지에 의존하지 않고 Canvas의 press/release 쌍을 기준으로 판정한다. 화면 좌표 이동이 작은 경우만 클릭으로 인정하고, 실제 드래그는 기존 이동 동작을 유지한다. 생성 요청은 큐와 비동기 drain 없이 검증 직후 기존 XML 쓰기 명령을 호출한다. 동일 제스처의 후속 click 이벤트는 입력 식별자와 시간·좌표를 이용해 중복 제거한다. refresh 예약과 모드 세대가 바뀌면 대기 중인 press 상태를 폐기한다.
+Child 추가는 운영체제가 click 이벤트를 생성하는지에 의존하지 않고 Canvas의 press/release 쌍을 기준으로 판정한다. 최신 US81에 따라 이동 거리와 관계없이 처음 누른 위치를 사용하고 release에서 확정한다. 생성 요청은 큐와 비동기 drain 없이 검증 직후 기존 XML 쓰기 명령을 호출한다. 동일 제스처의 후속 click 이벤트는 입력 식별자와 시간·좌표를 이용해 중복 제거한다. 모드 세대가 바뀌면 대기 중인 press 상태를 폐기한다.
 
 ## 생성 클릭 진단 계획
 
@@ -362,3 +362,28 @@ ServiceDiagramLayout.kt에서 노드의 PortConstraints를 FIXED_POS에서 FIXED
 ## 툴바 액션 아이콘 제거 (2026-10-24)
 
 Magnetic ToggleAction과 Properties 액션에서 icon을 null로 지정하고, 텍스트 라벨 표시 설정은 유지한다. 다른 툴바 액션의 아이콘에는 영향이 없어야 한다.
+## 처음 누른 위치에서 추가 설계 (2026-11-08)
+
+FR-234~FR-236에 따라 ModelDiagramCanvas.kt에서 Child의 press 위치와 Wire의 각 press 위치를 보존한다. release는 보존한 위치로 기존 생성 콜백 또는 접점 선택 함수를 호출한다. 드래그 미리보기도 보존 위치로 고정한다. 확정 전에 release의 캔버스·미니맵 경계를 검사하고 기존 취소·쓰기 보호와 클릭 중복 억제를 유지한다. 기존 모델·저장 형식과 의존성은 변경하지 않는다.
+
+ModelEditorCreationTraceTest.kt와 ModelDiagramWireCreationTest.kt의 위치 기대를 갱신한다. 서로 다른 Child 사이 드래그, 빈 공간 press, 화면 밖 release, 모드 취소 및 확대 좌표를 검증한다. 관련 모델 회귀와 컴파일을 실행하고 quickstart.md에 근거를 기록한다. 헌장은 미작성 템플릿이므로 추가 제약이 없다.
+
+## 모델 툴바 아이콘 설계 (2026-11-08)
+
+최신 US82가 기존 아이콘 제거 계획을 대체한다. ChildCreationToolbar.kt의 Snap은 기존 /icons/magnet.svg와 magnet_dark.svg를 IconLoader로 재사용한다. Orthogonal은 양 끝 점을 가진 직각 연결선의 orthogonal.svg·orthogonal_dark.svg를 추가하고 같은 로더로 연결한다. Properties는 QueryDesignEditor.kt의 주석 추가와 동일한 AllIcons.Actions.Annotate를 사용한다. 기존 텍스트 표시, ToggleAction 상태, 활성화 조건과 콜백을 유지한다. 데이터 모델 및 의존성 변경은 없다.
+
+검증은 modeleditor Kotlin 컴파일과 기존 ModelSnapSettingsTest·OrthogonalWireSnapTest를 사용하고 SVG의 크기·테마 쌍과 연결 경로를 확인한다. 가역적인 아이콘 변경에 구현을 그대로 반복하는 새 테스트는 추가하지 않는다.
+
+## Activity·Wire 추가 아이콘 설계 (2026-11-08)
+
+ChildCreationToolbar.kt에서 activity-add.svg를 IconLoader로 로드해 Activity 추가 액션의 templatePresentation과 update presentation 모두에 유지한다. 기존 update의 icon=null 처리를 교체한다. Wire 추가 액션은 wire-add.svg를 사용한다. 리소스는 modeleditor/src/main/resources/icons에 밝은·어두운 테마 쌍으로 추가하고 기존 아이콘과 동일한 16×16 크기 및 선 색상을 사용한다. 둥근 사각형·대각선과 끝점·더하기 표시는 SVG로 구성한다. 프리셋 이름·드롭다운 메뉴·상태와 콜백은 변경하지 않는다.
+
+기존 ModelActivityCreationTest·ModelDiagramWireCreationTest·ModelEditorFeaturesTest로 동작 회귀를 검증하고 Kotlin 컴파일, SVG XML·크기·테마 쌍 및 리소스 경로를 확인한다. 단순 아이콘 지정만 반복하는 새 테스트는 작성하지 않는다. 데이터 모델·의존성 변경은 없다.
+
+검증 중 기존 Activity 생성 통합 테스트에서 viewport의 visibleRect가 비어 있을 때 release 경계 판정이 잘못되어 놓은 위치로 되돌아가는 문제가 확인됐다. FR-234~FR-236의 처음 누른 위치 정책을 유지하도록 기존 updateCreationPoint와 동일하게 이 경우 컴포넌트 크기 경계를 사용한다. Wire도 같은 경계 기준을 적용하며 기존 실패 테스트와 생성 회귀를 재실행한다.
+
+## 모델 캔버스 단축키 설계 (2026-11-08)
+
+ChildCreationToolbar.kt에서 모델 캔버스 target에만 CustomShortcutSet과 수정 키 없는 VK_A/VK_W/VK_S/VK_O/VK_P를 등록한다. 별도 DumbAwareAction은 기존 버튼의 update 활성화 결과와 수행 경로를 재사용한다. Activity 키는 State 선택일 때 Activity를 선택한 후 모드를 활성화하고 기존 Activity 프리셋은 유지한다. 다른 토글은 기존 ToggleAction.actionPerformed를 재사용한다. 버튼 자체의 shortcutSet과 분리하여 툴팁에 자동 표기가 중복되지 않게 하고 description에 소문자 단축키를 표시한다. 글로벌 키맵·Source·속성 입력에는 등록하지 않는다.
+
+ModelEditorFeaturesTest.kt에서 실제 편집기의 canvas ACTIONS_KEY 등록과 다섯 키, 토글·교차 전환·프리셋·속성 콜백, 읽기 전용 및 속성 편집 불가 조건을 검증한다. 기존 생성·Snap·Orthogonal 회귀를 함께 실행한다.

@@ -596,3 +596,36 @@ T245 → T246 → T247 순으로 수행한다. 미커밋 projection은 Undo/Redo
 - [x] T249 [US80] `:modeleditor:compileKotlin` 및 플러그인 빌드, `git diff --check`로 UI 액션 변경을 확인하고 quickstart.md에 결과를 기록한다.
 
 T248 → T249 순으로 수행한다. 나머지 툴바 액션 아이콘은 그대로 둔다.
+## 75단계: 처음 누른 위치에서 추가
+
+- [x] T250 [US81] src/test/kotlin/com/look4counter/ModelEditorCreationTraceTest.kt 및 ModelDiagramWireCreationTest.kt에서 press 좌표·다른 Child 및 빈 공간 release·취소·확대 회귀 기대를 작성한다. FR-234~FR-236.
+- [x] T251 [US81] modeleditor/src/main/kotlin/com/look4counter/modeleditor/ModelDiagramCanvas.kt에서 press 위치 보존과 미리보기 고정, release 경계 검사 및 기존 중복·취소 보호를 구현한다. FR-234~FR-236.
+- [x] T252 [US81] 관련 모델 테스트와 컴파일을 실행하고 specs/003-model-diagram-design/quickstart.md에 결과를 기록한 뒤 speckit-converge로 현재 변경 범위를 대조한다. FR-234~FR-236.
+
+T250 → T251 → T252 순서로 수행한다. 같은 Canvas 경로의 변경이므로 순차 실행한다. 공통 입력 처리의 Activity와 Wire를 함께 완료한다. T186의 과거 드래그 거부 요구는 US81로 대체하며 기존 전체 회귀 완료 여부는 별도 근거로 판단한다.
+
+## 76단계: 모델 툴바 아이콘
+
+- [x] T253 [US82] modeleditor/src/main/resources/icons/orthogonal.svg 및 orthogonal_dark.svg에 16×16 직각 연결선을 추가한다. 기존 magnet.svg·magnet_dark.svg와 테마별 선 색상을 맞춘다. FR-237.
+- [x] T254 [US82] modeleditor/src/main/kotlin/com/look4counter/modeleditor/ChildCreationToolbar.kt에 자석·직각 연결선·AllIcons.Actions.Annotate를 연결하고 기존 텍스트 및 동작을 유지한다. FR-237~FR-239.
+- [x] T255 [US82] modeleditor 컴파일, 기존 토글 관련 회귀와 SVG 크기·테마 경로·diff 검사를 수행하고 specs/003-model-diagram-design/quickstart.md에 결과를 기록한 뒤 speckit-converge로 현재 범위를 대조한다. FR-237~FR-239.
+
+T253 → T254 → T255 순서로 수행한다. 아이콘과 참조를 함께 완료하고 토글 동작을 기존 테스트로 검증한다. 공통 툴바 파일을 변경하므로 순차 수행한다.
+
+## 77단계: Activity·Wire 추가 아이콘
+
+- [x] T256 [US83] modeleditor/src/main/resources/icons/activity-add.svg·activity-add_dark.svg 및 wire-add.svg·wire-add_dark.svg에 16×16 추가 아이콘과 테마 쌍을 작성한다. FR-240~FR-242.
+- [x] T257 [US83] modeleditor/src/main/kotlin/com/look4counter/modeleditor/ChildCreationToolbar.kt의 Activity 추가 template/update 및 Wire 추가 액션에 아이콘을 연결하고 텍스트·프리셋·드롭다운·토글 동작을 유지한다. FR-240~FR-242.
+- [x] T258 [US83] Kotlin 컴파일, 기존 생성·툴바 회귀, SVG 크기·테마·참조와 diff 검사를 수행하고 specs/003-model-diagram-design/quickstart.md에 결과를 기록한 뒤 speckit-converge로 현재 범위를 대조한다. FR-240~FR-242.
+
+T256 → T257 → T258 순서로 수행한다. 공통 툴바를 함께 변경하므로 순차 실행하며 두 추가 아이콘을 함께 완료한다.
+
+- [x] T259 [US81] modeleditor/src/main/kotlin/com/look4counter/modeleditor/ModelDiagramCanvas.kt의 Child·Wire release 경계에서 visibleRect가 비면 컴포넌트 크기를 사용하도록 기존 좌표 변환 경로와 맞추고 ModelActivityCreationTest의 실패 회귀를 재검증한다. FR-234~FR-236. 검증 중 발견한 보완 작업으로 T257 이후 T258 완료 전에 수행한다.
+
+## 78단계: 모델 캔버스 단축키
+
+- [x] T260 [US84] src/test/kotlin/com/look4counter/ModelEditorFeaturesTest.kt에 a/w/s/o/p의 캔버스 등록·툴팁·버튼 동일 동작·State 전환과 비활성 보호 회귀를 작성한다. FR-243~FR-245.
+- [x] T261 [US84] modeleditor/src/main/kotlin/com/look4counter/modeleditor/ChildCreationToolbar.kt에 다섯 단축키를 캔버스 범위로 등록하고 버튼 description에 키를 표시하며 기존 활성화·콜백·프리셋·모드 전환을 재사용한다. FR-243~FR-245.
+- [x] T262 [US84] 컴파일과 관련 생성·Snap·Orthogonal 회귀를 실행하고 specs/003-model-diagram-design/quickstart.md에 결과를 기록한 뒤 speckit-converge로 이번 요구사항과 구현을 대조한다. FR-243~FR-245.
+
+T260 → T261 → T262 순서로 수행한다. 같은 툴바 입력 경로를 변경하므로 순차 실행한다. 다섯 키를 함께 완료한다.

@@ -139,7 +139,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     private var wireCreationStartPoint: DiagramPoint? = null
     private var wireCreationPoint: DiagramPoint? = null
     private var wireCreationTarget: DiagramNode? = null
-    private var wireCreationPressed = false
+    private var wireCreationPressPoint: Point? = null
     var creationKind: DiagramNodeKind? = null
         private set
     var creationRevision = 0L
@@ -286,7 +286,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         val navigation = object : MouseAdapter() {
             override fun mousePressed(event: MouseEvent) {
                 suppressEditClick = false
-                wireCreationPressed = false
+                wireCreationPressPoint = null
                 traceCreationMouse(event)
                 if (SwingUtilities.isLeftMouseButton(event) && miniMapProjection?.frame?.contains(event.point) == true) {
                     val projection = miniMapProjection!!
@@ -303,7 +303,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     return
                 }
                 if (wireCreationMode && SwingUtilities.isLeftMouseButton(event)) {
-                    wireCreationPressed = event.clickCount <= 1
+                    wireCreationPressPoint = event.point.takeIf { event.clickCount <= 1 }
                     updateWireCreation(event.point)
                     requestFocusInWindow()
                     repaint()
@@ -483,12 +483,12 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                 }
                 if (creationKind != null && creationPressPoint != null &&
                     SwingUtilities.isLeftMouseButton(event)) {
-                    updateCreationPoint(event.point, event.isAltDown)
+                    updateCreationPoint(creationPressPoint!!, event.isAltDown)
                     event.consume()
                     return
                 }
                 if (wireCreationMode && previous == null) {
-                    updateWireCreation(event.point); repaint(); event.consume(); return
+                    updateWireCreation(wireCreationPressPoint ?: event.point); repaint(); event.consume(); return
                 }
                 val last = previous
                 val start = boxStart
@@ -547,7 +547,10 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     creationPressPoint = null
                     creationPressRevision = -1L
                     if (press != null && sameRevision) {
-                        updateCreationPoint(event.point, event.isAltDown)
+                        val releaseArea = visibleRect.takeUnless { it.isEmpty } ?: Rectangle(0, 0, width, height)
+                        val releaseValid = releaseArea.contains(event.point) &&
+                            miniMapProjection?.frame?.contains(event.point) != true
+                        updateCreationPoint(if (releaseValid) press else event.point, event.isAltDown)
                         if (creationPoint != null) {
                             lastCreationInputId = ChildCreationTrace.inputId(event)
                             val ghost = ghostNode
@@ -570,10 +573,12 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
                     return
                 }
                 if (wireCreationMode && previous == null && SwingUtilities.isLeftMouseButton(event)) {
-                    val pressed = wireCreationPressed
-                    wireCreationPressed = false
+                    val press = wireCreationPressPoint
+                    wireCreationPressPoint = null
                     suppressEditClick = true
-                    if (pressed) selectWireCreationPoint(event.point)
+                    val releaseArea = visibleRect.takeUnless { it.isEmpty } ?: Rectangle(0, 0, width, height)
+                    if (press != null && releaseArea.contains(event.point) &&
+                        miniMapProjection?.frame?.contains(event.point) != true) selectWireCreationPoint(press)
                     suppressEditClick = true
                     event.consume()
                     return
@@ -890,7 +895,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
         if (isDragging) cancelDrag()
         if (enabled && creationKind != null) setCreationKind(null)
         wireCreationMode = enabled
-        wireCreationPressed = false
+        wireCreationPressPoint = null
         wireCreationStart = null; wireCreationStartPoint = null; wireCreationPoint = null; wireCreationTarget = null
         cursor = Cursor.getPredefinedCursor(if (enabled) Cursor.CROSSHAIR_CURSOR else Cursor.DEFAULT_CURSOR)
         onWireCreationModeChanged?.invoke(enabled)
@@ -944,7 +949,7 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
     }
 
     private fun clearGesture() {
-        wireCreationPressed = false
+        wireCreationPressPoint = null
         clearNavigationSnapshot()
         navigationSnapshotAttempted = false
         orthogonalSnap.reset()
@@ -1340,13 +1345,16 @@ class ModelDiagramCanvas : JComponent(), UiDataProvider, javax.swing.Scrollable 
             g.transform = screenTransform
             g.color = wireColor
             val visible = visibleRect
-            g.drawString("x: ${pan.x.roundToInt()}, y: ${pan.y.roundToInt()}", visible.x + 8, visible.y + g.fontMetrics.ascent + 8)
-            var propertyY = visible.y + g.fontMetrics.ascent + 8 + g.fontMetrics.height
+            var propertyY = visible.y + g.fontMetrics.ascent + 8
             diagramPropertyLines.forEach { line ->
                 g.drawString(line, visible.x + 8, propertyY)
                 propertyY += g.fontMetrics.height
             }
             drawMiniMap(g)
+            miniMapProjection?.frame?.let { frame ->
+                g.drawString("x: ${pan.x.roundToInt()}, y: ${pan.y.roundToInt()}",
+                    frame.x + 8, frame.y + frame.height + g.fontMetrics.ascent + 8)
+            }
         } finally { g.dispose() }
     }
 

@@ -4,17 +4,47 @@ import com.intellij.openapi.command.WriteCommandAction
 import com.intellij.openapi.fileEditor.FileDocumentManager
 import com.intellij.openapi.fileEditor.FileEditor
 import com.intellij.openapi.fileEditor.FileEditorManager
-import com.intellij.openapi.util.Disposer
 import com.intellij.psi.PsiDocumentManager
 import com.intellij.psi.PsiManager
 import com.intellij.psi.xml.XmlFile
 import com.intellij.testFramework.fixtures.BasePlatformTestCase
 import com.intellij.testFramework.replaceService
-import com.intellij.util.ui.UIUtil
 import com.look4counter.modeleditor.*
-import javax.swing.JScrollPane
 
 class ModelServiceDirectEditorTest : BasePlatformTestCase() {
+
+    fun testSourceConflictRejectsCommitAndRollbackReloadsLatestSource() {
+        val file = myFixture.addFileToProject("conflict-service.xml", xml()).virtualFile
+        val document = FileDocumentManager.getInstance().getDocument(file)!!
+        val adapter = ServiceDiagramAdapter(project, file)
+        val view = adapter.read(source(file))
+        WriteCommandAction.runWriteCommandAction(project) {
+            view.rootTag!!.subTags.first { it.getAttributeValue("name") == "Router" }.setAttribute("name", "Pending")
+        }
+        adapter.markPendingChanges()
+        val latest = xml().replace("sample.Router", "sample.Latest")
+        WriteCommandAction.runWriteCommandAction(project) { document.setText(latest) }
+        PsiDocumentManager.getInstance(project).commitDocument(document)
+        assertSame(view, adapter.read(source(file)))
+        WriteCommandAction.runWriteCommandAction(project) {
+            try {
+                adapter.apply(view)
+                fail("Source 변경과 충돌하는 Commit을 거부해야 합니다.")
+            } catch (error: IllegalArgumentException) {
+                assertTrue(error.message.orEmpty().contains("Source XML"))
+            }
+        }
+        assertEquals(latest, document.text)
+        assertTrue(adapter.hasPendingChanges())
+        assertTrue(ModelDiagramParser.parse(view).nodes.any { it.name == "Pending" })
+        adapter.rollback()
+        val restored = ModelDiagramParser.parse(adapter.read(source(file)))
+        assertFalse(adapter.hasPendingChanges())
+        assertEquals("sample.Latest", restored.nodes.single { it.name == "Router" }.className)
+        assertFalse(restored.nodes.any { it.name == "Pending" })
+        assertEquals(latest, document.text)
+    }
+
     fun testPendingChangeQueriesReuseComparisonUntilViewChanges() {
         val file = myFixture.addFileToProject("cached-service.xml", xml()).virtualFile
         val adapter = ServiceDiagramAdapter(project, file)
@@ -45,7 +75,7 @@ class ModelServiceDirectEditorTest : BasePlatformTestCase() {
         super.setUp()
         val settings = ModelEditorSettings.getInstance(project)
         previous = settings.state
-        settings.loadState(ModelEditorState(noUseGlueUmlAdFile = true))
+        settings.loadState(ModelEditorState())
     }
     override fun tearDown() {
         try { ModelEditorSettings.getInstance(project).loadState(previous) } finally { super.tearDown() }
@@ -61,15 +91,8 @@ class ModelServiceDirectEditorTest : BasePlatformTestCase() {
         <activity name="Detached" class="sample.Detached"/>
         <extra-element keep="yes"/>
     </service>""".trimIndent()
-    private fun canvas(editor: FileEditor) = editor.component.components.filterIsInstance<JScrollPane>().single().viewport.view as ModelDiagramCanvas
     private fun source(file: com.intellij.openapi.vfs.VirtualFile) = PsiManager.getInstance(project).findFile(file) as XmlFile
 
-    private fun commit(editor: FileEditor) {
-        val toolbar = editor.component.components.filterIsInstance<ChildCreationToolbar>().single()
-        toolbar.commitAction.actionPerformed(com.intellij.openapi.actionSystem.AnActionEvent.createFromAnAction(
-            toolbar.commitAction, null, "test", com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT))
-        UIUtil.dispatchAllInvocationEvents()
-    }
 
     fun testServiceProjectionAndGeometryChangesDoNotModifySourceOrCreateModelFiles() {
         val file = myFixture.addFileToProject("services/direct-service.xml", xml()).virtualFile
@@ -133,75 +156,7 @@ class ModelServiceDirectEditorTest : BasePlatformTestCase() {
         assertFalse(document.text.contains("bendpoint"))
     }
 
-    fun testSameDesignEditorReflectsSourceChangesAndRecoversAfterInvalidSource() {
-        val file = myFixture.addFileToProject("refresh-service.xml", xml()).virtualFile
-        val editor = ModelDesignEditorProvider().createEditor(project, file)
-        try {
-            assertEquals(3, canvas(editor).diagram.nodes.count { it.isActivity })
-            val document = FileDocumentManager.getInstance().getDocument(file)!!
-            WriteCommandAction.runWriteCommandAction(project) { document.setText(xml().replace("sample.Router", "sample.New")) }
-            UIUtil.dispatchAllInvocationEvents()
-            assertEquals("sample.New", canvas(editor).diagram.nodes.first { it.name == "Router" }.className)
-            WriteCommandAction.runWriteCommandAction(project) { document.setText("<service>") }
-            UIUtil.dispatchAllInvocationEvents()
-            assertNotNull(canvas(editor).diagram.message)
-            WriteCommandAction.runWriteCommandAction(project) { document.setText(xml()) }
-            UIUtil.dispatchAllInvocationEvents()
-            assertNull(canvas(editor).diagram.message)
-            assertEquals(xml(), document.text)
-        } finally { Disposer.dispose(editor) }
-    }
 
-    fun testExistingDesignActionsEditActualServiceAndUndoRedoRefreshesDesign() {
-        val file = myFixture.addFileToProject("actions-service.xml", xml()).virtualFile
-        val editor = ModelDesignEditorProvider().createEditor(project, file)
-        val textEditor = com.intellij.openapi.fileEditor.impl.text.TextEditorProvider.getInstance().createEditor(project, file)
-        val document = FileDocumentManager.getInstance().getDocument(file)!!
-        val before = document.text
-        project.replaceService(ModelDiagramDialogs::class.java, object : ModelDiagramDialogs {
-            override fun editActivity(data: ActivityPropertiesData) = data.copy(name = "Edited")
-            override fun editCondition(condition: String) = "updated"
-        }, testRootDisposable)
-        try {
-            val canvas = canvas(editor)
-            val movedNode = canvas.diagram.nodes.first { it.name == "Router" }
-            canvas.onMoveStarted!!.invoke()
-            canvas.onNodesMoved!!.invoke(mapOf(movedNode to DiagramPoint(400.0, 500.0)))
-            UIUtil.dispatchAllInvocationEvents()
-            assertEquals(before, document.text)
-            canvas.onActivityEditRequested!!.invoke(canvas.diagram.nodes.first { it.name == "Router" })
-            UIUtil.dispatchAllInvocationEvents()
-            assertEquals("Router", source(file).rootTag!!.getAttributeValue("initial"))
-            assertTrue(canvas.diagram.nodes.any { it.name == "Edited" })
-            commit(editor)
-            assertEquals("Edited", source(file).rootTag!!.getAttributeValue("initial"))
-            assertTrue(canvas.diagram.nodes.any { it.name == "Edited" })
-            val undo = com.intellij.openapi.command.undo.UndoManager.getInstance(project)
-            assertTrue(undo.isUndoAvailable(textEditor))
-            undo.undo(textEditor)
-            UIUtil.dispatchAllInvocationEvents()
-            assertEquals(before, document.text)
-            assertTrue(canvas.diagram.nodes.any { it.name == "Router" })
-            undo.redo(textEditor)
-            UIUtil.dispatchAllInvocationEvents()
-            assertTrue(canvas.diagram.nodes.any { it.name == "Edited" })
-            val wire = canvas.diagram.wires.first { it.start?.name == "Edited" }
-            canvas.onWireEditRequested!!.invoke(wire)
-            UIUtil.dispatchAllInvocationEvents()
-            commit(editor)
-            val actual = source(file).rootTag!!.subTags.first { it.localName == "activity" }
-            assertEquals("updated", actual.subTags.first { it.localName == "transition" }.getAttributeValue("name"))
-            val originalWire = canvas.diagram.wires.first { it.start?.name == "Edited" }
-            canvas.onMoveStarted!!.invoke()
-            canvas.onWireEdited!!.invoke(originalWire, originalWire.copy(end = canvas.diagram.nodes.single { it.name == "Detached" }), null)
-            UIUtil.dispatchAllInvocationEvents()
-            assertFalse(canvas.diagram.wires.first { it.start?.name == "Edited" }.explicitContacts)
-            commit(editor)
-            assertTrue(canvas.diagram.wires.first { it.start?.name == "Edited" }.explicitContacts)
-            assertEquals("Detached", actual.subTags.first { it.localName == "transition" }.getAttributeValue("value"))
-            assertFalse(document.text.contains("location="))
-        } finally { Disposer.dispose(editor); Disposer.dispose(textEditor) }
-    }
 
     fun testDeletingActivityAndAddingAndRemovingPropertiesKeepsProjectionMappingsValid() {
         val file = myFixture.addFileToProject("delete-service.xml", xml()).virtualFile
@@ -227,18 +182,20 @@ class ModelServiceDirectEditorTest : BasePlatformTestCase() {
         assertEquals("second", actual.getAttributeValue("value"))
     }
 
-    fun testOpenServiceAndProvidersFollowOptionAndDoNotExportModels() {
+    fun testLegacyTrueUsesModelFilesAndDoesNotEnableServiceEditors() {
         val model = myFixture.addFileToProject("flows/target.glue_uml_ad", "<GlueDiagram/>").virtualFile
         val service = myFixture.addFileToProject("services/target-service.xml", xml()).virtualFile
         val other = myFixture.addFileToProject("services/other.xml", "<root/>").virtualFile
         val settings = ModelEditorSettings.getInstance(project)
         settings.loadState(ModelEditorState(serviceDirectory = "services", noUseGlueUmlAdFile = true))
-        assertEquals(service, ServiceFiles.resolve(project, "target-service"))
-        assertEquals(listOf("target-service"), ServiceFiles.names(project))
-        assertTrue(ModelDesignEditorProvider().accept(project, service))
-        assertTrue(ModelSourceEditorProvider().accept(project, service))
+        assertFalse(settings.state.noUseGlueUmlAdFile)
+        assertEquals(model, ServiceFiles.resolve(project, "target-service"))
+        assertEquals(listOf("other", "target-service"), ServiceFiles.names(project))
+        assertFalse(ModelDesignEditorProvider().accept(project, service))
+        assertFalse(ModelSourceEditorProvider().accept(project, service))
+        assertTrue(ModelDesignEditorProvider().accept(project, model))
+        assertTrue(ModelSourceEditorProvider().accept(project, model))
         assertFalse(ModelDesignEditorProvider().accept(project, other))
-        assertNull(ModelServiceSaveListener().save(project, model, "<GlueDiagram/>"))
         var opened: com.intellij.openapi.vfs.VirtualFile? = null
         var selected = ""
         val manager = object : com.intellij.mock.Mock.MyFileEditorManager() {
@@ -247,11 +204,12 @@ class ModelServiceDirectEditorTest : BasePlatformTestCase() {
         }
         project.replaceService(FileEditorManager::class.java, manager, testRootDisposable)
         assertTrue(ServiceFiles.open(project, "target-service.xml"))
-        assertEquals(service, opened)
+        assertEquals(model, opened)
         assertEquals("glue-model-design", selected)
         settings.loadState(ModelEditorState())
         assertEquals(model, ServiceFiles.resolve(project, "target-service"))
         assertFalse(ModelDesignEditorProvider().accept(project, service))
+        assertEquals(xml(), FileDocumentManager.getInstance().getDocument(service)!!.text)
     }
 
     fun testForeignNamespaceMetadataAndParallelAndLoopRoutesArePreserved() {
@@ -283,77 +241,6 @@ class ModelServiceDirectEditorTest : BasePlatformTestCase() {
         assertEquals(1, router.subTags.count { it.localName == "property" && it.namespace == "urn:extension" })
     }
 
-    fun testInvalidReferencesAndReadOnlyDocumentsCannotOverwriteSource() {
-        val invalid = xml().replace("value=\"Next\"", "value=\"Missing\"")
-        val file = myFixture.addFileToProject("invalid-service.xml", invalid).virtualFile
-        val document = FileDocumentManager.getInstance().getDocument(file)!!
-        val editor = ModelDesignEditorProvider().createEditor(project, file)
-        try {
-            assertNotNull(canvas(editor).diagram.message)
-            assertEquals(invalid, document.text)
-            WriteCommandAction.runWriteCommandAction(project) { document.setText(xml()) }
-            UIUtil.dispatchAllInvocationEvents()
-            document.setReadOnly(true)
-            assertFalse(canvas(editor).canMoveNodes())
-            val node = canvas(editor).diagram.nodes.first { it.isActivity }
-            canvas(editor).onActivityEditRequested!!.invoke(node)
-            assertEquals(xml(), document.text)
-        } finally { document.setReadOnly(false); Disposer.dispose(editor) }
-    }
 
-    fun testCreationCopyPasteAndDeleteUseServiceXmlWithoutDuplicateActivityNames() {
-        val file = myFixture.addFileToProject("creation-service.xml", xml()).virtualFile
-        val editor = ModelDesignEditorProvider().createEditor(project, file)
-        try {
-            val canvas = canvas(editor)
-            canvas.setCreationKind(DiagramNodeKind.Activity, ActivityPreset("Router", mutableListOf(PresetProperty("class", "sample.New"))))
-            canvas.onChildCreateRequested!!.invoke(DiagramNodeKind.Activity, DiagramPoint(600.0, 600.0))
-            UIUtil.dispatchAllInvocationEvents()
-            assertTrue(canvas.diagram.nodes.any { it.name == "Router_2" })
-            canvas.setCreationKind(null)
-            canvas.selectNodesByIds(setOf(canvas.diagram.nodes.single { it.name == "Router_2" }.id))
-            val context = com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT
-            canvas.copyProvider!!.performCopy(context)
-            assertTrue(canvas.pasteProvider!!.isPasteEnabled(context))
-            canvas.pasteProvider!!.performPaste(context)
-            UIUtil.dispatchAllInvocationEvents()
-            assertTrue(canvas.diagram.nodes.any { it.name == "Router_2_2" })
-            assertTrue(canvas.deleteProvider!!.canDeleteElement(context))
-            canvas.deleteProvider!!.deleteElement(context)
-            UIUtil.dispatchAllInvocationEvents()
-            assertFalse(source(file).rootTag!!.subTags.any { it.getAttributeValue("name") == "Router_2" })
-            commit(editor)
-            val names = source(file).rootTag!!.subTags.filter { it.localName == "activity" }.map { it.getAttributeValue("name") }
-            assertTrue("Router_2" in names)
-            assertFalse("Router_2_2" in names)
-            assertEquals(names.size, names.distinct().size)
-            assertNull(file.parent.findChild("creation.glue_uml_ad"))
-        } finally { Disposer.dispose(editor) }
-    }
 
-    fun testSeparatedPortsSurviveGroupMoveAndSingleMoveReturnsToEditableGeometry() {
-        val file = myFixture.addFileToProject("ports-service.xml", xml()).virtualFile
-        val editor = ModelDesignEditorProvider().createEditor(project, file)
-        val document = FileDocumentManager.getInstance().getDocument(file)!!
-        val before = document.text
-        try {
-            val canvas = canvas(editor)
-            val wire = canvas.diagram.wires.first { it.start?.name == "Router" }
-            val oldPath = DiagramGeometry.path(wire)
-            val delta = DiagramPoint(40.0, 60.0)
-            canvas.onMoveStarted!!.invoke()
-            canvas.onNodesMoved!!.invoke(listOf(wire.start!!, wire.end!!).associateWith { it.location + delta })
-            UIUtil.dispatchAllInvocationEvents()
-            var moved = canvas.diagram.wires.first { it.start?.name == "Router" }
-            assertTrue(moved.explicitContacts)
-            assertEquals(oldPath.map { it + delta }, DiagramGeometry.path(moved))
-            canvas.onMoveStarted!!.invoke()
-            canvas.onNodesMoved!!.invoke(mapOf(moved.start!! to moved.start!!.location + delta))
-            UIUtil.dispatchAllInvocationEvents()
-            moved = canvas.diagram.wires.first { it.start?.name == "Router" }
-            assertFalse(moved.explicitContacts)
-            assertEquals(before, document.text)
-            assertFalse(document.text.contains("explicitContacts"))
-        } finally { Disposer.dispose(editor) }
-    }
 }

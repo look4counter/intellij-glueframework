@@ -2,12 +2,16 @@ package com.look4counter.queryeditor.sql
 
 import com.intellij.codeInsight.completion.CompletionParameters
 import com.intellij.codeInsight.completion.CompletionResultSet
+import com.intellij.codeInsight.completion.CompletionSorter
 import com.intellij.codeInsight.lookup.CharFilter
+import com.intellij.codeInsight.lookup.LookupElement
 import com.intellij.codeInsight.lookup.LookupElementBuilder
+import com.intellij.codeInsight.lookup.LookupElementWeigher
 import com.intellij.openapi.project.DumbAware
 import com.intellij.openapi.project.Project
 import com.look4counter.queryeditor.database.DatabaseMetadataService
 import com.intellij.util.textCompletion.TextCompletionProvider
+import java.util.Locale
 
 internal class SqlKeywordCompletionProvider(private val project: Project) : TextCompletionProvider, DumbAware {
     override fun getAdvertisement(): String? = null
@@ -19,31 +23,51 @@ internal class SqlKeywordCompletionProvider(private val project: Project) : Text
         return text.substring(start, end)
     }
 
-    override fun applyPrefixMatcher(result: CompletionResultSet, prefix: String): CompletionResultSet =
-        result.withPrefixMatcher(prefix).caseInsensitive()
+    override fun applyPrefixMatcher(result: CompletionResultSet, prefix: String): CompletionResultSet {
+        result.restartCompletionOnPrefixChange(".*\\..*")
+        return result.withPrefixMatcher(prefix).caseInsensitive()
+    }
 
     override fun acceptChar(char: Char): CharFilter.Result =
-        if (SqlLexer.isWord(char)) CharFilter.Result.ADD_TO_PREFIX else CharFilter.Result.HIDE_LOOKUP
+        if (SqlLexer.isWord(char) || char == '.') CharFilter.Result.ADD_TO_PREFIX else CharFilter.Result.HIDE_LOOKUP
 
     override fun fillCompletionVariants(parameters: CompletionParameters, prefix: String, result: CompletionResultSet) {
-        val text = parameters.originalFile.text
+        val text = parameters.editor.document.text
+        val offset = parameters.offset.coerceIn(0, text.length)
         if (!parameters.editor.isViewer && parameters.editor.document.isWritable &&
-            SqlLexer.completionAllowed(text, parameters.offset.coerceAtMost(text.length)) &&
-            (prefix.isNotEmpty() || parameters.invocationCount > 0)
+            (prefix.isNotEmpty() || parameters.invocationCount > 0 || text.getOrNull(offset - 1) == '.')
         ) {
+            val context = SqlCompletionAnalyzer.analyze(text, offset, DatabaseMetadataService.getInstance(project).snapshot())
             val candidates = linkedMapOf<String, MutableSet<String>>()
-            fun add(names: Iterable<String>, kind: String) {
-                names.filter { it.startsWith(prefix, ignoreCase = true) }.forEach { candidates.getOrPut(it) { linkedSetOf() }.add(kind) }
+            val lookupNames = mutableMapOf<String, MutableSet<String>>()
+            val names = context.candidates + if (context.includeKeywords) SqlKeywords.words.map { SqlNameCandidate(it, it, "SQL 키워드") } else emptyList()
+            names.filter { it.lookupName.startsWith(prefix, ignoreCase = true) || it.text.startsWith(prefix, ignoreCase = true) }.forEach {
+                candidates.getOrPut(it.text) { linkedSetOf() }.add(it.kind)
+                lookupNames.getOrPut(it.text) { linkedSetOf() }.add(it.lookupName)
             }
-            add(SqlKeywords.words, "SQL 키워드")
-            DatabaseMetadataService.getInstance(project).snapshot()?.let {
-                add(it.tableNames, "테이블")
-                add(it.columnNames, "컬럼")
-            }
+            val sorter = CompletionSorter.emptySorter()
+                .weigh(object : LookupElementWeigher("glue.sql.kind") {
+                    override fun weigh(element: LookupElement): Comparable<*> =
+                        candidates[element.lookupString]?.minOf { kindPriority(it, context.kind) } ?: Int.MAX_VALUE
+                })
+                .weigh(object : LookupElementWeigher("glue.sql.name") {
+                    override fun weigh(element: LookupElement): Comparable<*> = element.lookupString.lowercase(Locale.ROOT)
+                })
+            val ordered = result.withRelevanceSorter(sorter)
             candidates.forEach { (name, kinds) ->
-                result.addElement(LookupElementBuilder.create(name).withCaseSensitivity(false).withTypeText(kinds.joinToString(" / "), true))
+                ordered.addElement(LookupElementBuilder.create(name).withLookupStrings(lookupNames.getValue(name))
+                    .withCaseSensitivity(false).withTypeText(kinds.joinToString(" / "), true))
             }
         }
         result.stopHere()
+    }
+
+    private fun kindPriority(kind: String, context: SqlCompletionKind): Int = when {
+        context == SqlCompletionKind.TABLE && kind in setOf("CTE", "테이블") -> 0
+        kind.startsWith("컬럼") || kind == "출력 컬럼" -> 0
+        kind == "CTE" -> 1
+        kind == "테이블" -> 2
+        kind == "SQL 키워드" -> 3
+        else -> 4
     }
 }

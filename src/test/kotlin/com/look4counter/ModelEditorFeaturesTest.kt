@@ -7,6 +7,71 @@ import java.awt.event.MouseEvent
 import java.awt.event.MouseWheelEvent
 
 class ModelEditorFeaturesTest : BasePlatformTestCase() {
+    fun testCanvasShortcutsMatchButtonsAndPreservePresetsAndGuards() {
+        val canvas = ModelDiagramCanvas()
+        var editable = true
+        var propertiesEnabled = true
+        var snap = false
+        var orthogonal = false
+        var propertiesOpened = 0
+        lateinit var toolbar: ChildCreationToolbar
+        toolbar = ChildCreationToolbar(canvas, DiagramNodeKind.InitialState, { editable },
+            { canvas.creationKind != null },
+            { enabled, kind -> canvas.setCreationKind(if (enabled) kind else null, toolbar.selectedPreset) },
+            { kind -> if (canvas.creationKind != null) canvas.setCreationKind(kind) },
+            snapState = { snap }, onSnapChanged = { snap = it },
+            onDiagramProperties = { propertiesOpened++ }, canEditProperties = { propertiesEnabled },
+            wireCreationState = { canvas.wireCreationMode }, onWireCreationChanged = { canvas.setWireCreationMode(it) },
+            orthogonalState = { orthogonal }, onOrthogonalChanged = { orthogonal = it })
+        val registered = (canvas.getClientProperty(com.intellij.openapi.actionSystem.AnAction.ACTIONS_KEY) as List<*>)
+            .filterIsInstance<com.intellij.openapi.actionSystem.AnAction>()
+        val shortcuts = registered.flatMap { action -> action.shortcutSet.shortcuts
+            .filterIsInstance<com.intellij.openapi.actionSystem.KeyboardShortcut>().map { it.firstKeyStroke to action } }
+        val keys = listOf(java.awt.event.KeyEvent.VK_A, java.awt.event.KeyEvent.VK_W, java.awt.event.KeyEvent.VK_S,
+            java.awt.event.KeyEvent.VK_O, java.awt.event.KeyEvent.VK_P)
+        assertTrue(keys.all { key -> shortcuts.count { it.first == javax.swing.KeyStroke.getKeyStroke(key, 0) } == 1 })
+        assertNull(javax.swing.JTextField().getClientProperty(com.intellij.openapi.actionSystem.AnAction.ACTIONS_KEY))
+        assertNull(toolbar.getClientProperty(com.intellij.openapi.actionSystem.AnAction.ACTIONS_KEY))
+        fun press(key: Int) {
+            val action = shortcuts.single { it.first == javax.swing.KeyStroke.getKeyStroke(key, 0) }.second
+            action.actionPerformed(com.intellij.openapi.actionSystem.AnActionEvent.createFromAnAction(
+                action, null, "test", com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT))
+        }
+        press(java.awt.event.KeyEvent.VK_A)
+        assertEquals(DiagramNodeKind.Activity, canvas.creationKind)
+        assertEquals(DiagramNodeKind.Activity, toolbar.selectedKind)
+        val preset = ActivityPreset("Shortcut preset")
+        toolbar.selectPreset(preset)
+        press(java.awt.event.KeyEvent.VK_A)
+        assertNull(canvas.creationKind)
+        press(java.awt.event.KeyEvent.VK_A)
+        assertEquals("Shortcut preset", canvas.creationPreset?.name)
+        press(java.awt.event.KeyEvent.VK_W)
+        assertTrue(canvas.wireCreationMode)
+        assertNull(canvas.creationKind)
+        press(java.awt.event.KeyEvent.VK_A)
+        assertFalse(canvas.wireCreationMode)
+        assertEquals(DiagramNodeKind.Activity, canvas.creationKind)
+        press(java.awt.event.KeyEvent.VK_S)
+        press(java.awt.event.KeyEvent.VK_O)
+        assertTrue(snap)
+        assertTrue(orthogonal)
+        press(java.awt.event.KeyEvent.VK_P)
+        assertEquals(1, propertiesOpened)
+        editable = false
+        propertiesEnabled = false
+        press(java.awt.event.KeyEvent.VK_A)
+        press(java.awt.event.KeyEvent.VK_W)
+        press(java.awt.event.KeyEvent.VK_P)
+        assertEquals(DiagramNodeKind.Activity, canvas.creationKind)
+        assertFalse(canvas.wireCreationMode)
+        assertEquals(1, propertiesOpened)
+        assertEquals("Activity 추가 (a)", toolbar.toggleAction.templatePresentation.description)
+        assertEquals("Wire 추가 (w)", toolbar.wireCreationAction.templatePresentation.description)
+        assertEquals("정렬 토글 (s)", toolbar.snapAction.templatePresentation.description)
+        assertEquals("직각 Wire 토글 (o)", toolbar.orthogonalAction.templatePresentation.description)
+        assertEquals("파일 속성 (p)", toolbar.diagramPropertiesAction.templatePresentation.description)
+    }
     private var previousSnap = false
 
     override fun setUp() {

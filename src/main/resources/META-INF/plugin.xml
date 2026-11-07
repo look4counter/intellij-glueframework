@@ -10,13 +10,17 @@
     <name>Intellij-glueframework</name>
 
     <!-- A displayed Vendor name or Organization ID displayed on the Plugins Page. -->
-    <vendor url="https://www.yourcompany.com">YourCompany</vendor>
+    <vendor url="https://github.com/look4counter/intellij-glueframework">look4counter</vendor>
 
     <!-- Description of the plugin displayed on the Plugin Page and IDE Plugin Manager.
          Guidelines: https://plugins.jetbrains.com/docs/marketplace/best-practices-for-listing.html#plugin-description -->
     <description><![CDATA[
-        Enter short description for your plugin here.<br>
-        <em>most HTML tags may be used</em>
+        <p>GlueFramework query and activity diagram editors for service development.</p>
+        <ul>
+            <li>쿼리 목록과 속성, SQL을 Design/Source 탭에서 편집하고 Java 코드의 쿼리 참조를 탐색합니다.</li>
+            <li>Activity와 연결선을 다이어그램으로 편집하고 서비스 XML 생성 및 직접 편집을 지원합니다.</li>
+            <li>프로젝트별 데이터 소스의 테이블·컬럼 메타데이터를 SQL 자동완성에 사용합니다.</li>
+        </ul>
         ]]></description>
 
     <!-- Product and plugin compatibility requirements.

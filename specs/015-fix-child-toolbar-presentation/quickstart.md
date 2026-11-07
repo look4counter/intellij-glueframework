@@ -27,3 +27,12 @@ build/distributions/intellij-glueframework-1.0.0-SNAPSHOT.zip을 생성했다. Z
 ## 최종 수렴 점검
 
 기능 요구사항 4개·성공 기준 3개·인수 시나리오 4개와 커스텀 컴포넌트·표시 갱신·토글 위임 설계를 현재 코드와 테스트에 대조했다. 헌법은 미작성 템플릿으로 추가 원칙 검사를 생략했다. 누락·부분 구현·상충·범위 밖 변경은 없으며 추가 작업은 0개다.
+
+## 표시 이름과 안내 정리 검증
+
+- 명세·명확화·계획·작업을 갱신하고 FR-005를 T007·T008과 대조했다. 기존 컴포넌트·토글·읽기 전용 동작과 충돌이 없다. 명세 품질 점검을 통과했고 추가 질문은 없다.
+- Empty Activity 명칭 및 Activity 선택 메뉴를 반영했다. 생성 버튼은 선택 종류·프리셋에 관계없이 Activity 추가로 안내한다. Wire·Snap·Orthogonal·Properties의 안내를 Wire 추가·정렬 토글·직각 Wire 토글·파일 속성으로 통일했다.
+- ChildCreationToolbarTest 2개와 ModelDiagramPropertiesTest 29개로 31개가 통과했다. 기본/프리셋/다른 종류의 안내, 컴포넌트 보존 및 기존 생성·속성·읽기 전용 상태를 확인했다. 단순 문구 변경에 새 테스트 클래스를 추가하지 않았다.
+- QueryEditor 47개와 함께 최종 검증 78개, 설치 ZIP 및 플러그인 구조 검사가 성공했다. 기존 환경 제약으로 buildSearchableOptions만 제외했다. 근거: .gradle-validation/trace-tree-toolbar-final.log. 실제 사용자 IDE 수동 조작은 수행하지 않았다.
+
+- 프로젝트 전체 회귀 552개가 통과했다. 실패·오류·건너뜀은 각각 0개다. 근거: .gradle-validation/trace-tree-toolbar-regression.log 및 build/test-results/test의 전체 XML 결과.

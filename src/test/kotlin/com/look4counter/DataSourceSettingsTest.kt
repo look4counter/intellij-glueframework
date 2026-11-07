@@ -12,7 +12,8 @@ import com.look4counter.queryeditor.settings.DataSourceDefinition
 import com.look4counter.queryeditor.settings.DataSourcePasswordManager
 import com.look4counter.queryeditor.settings.DataSourceSettingsService
 import com.look4counter.queryeditor.settings.DataSourcesState
-import com.look4counter.queryeditor.settings.GlueQueryEditorConfigurable
+import com.look4counter.queryeditor.settings.GlueQueryDatabaseConfigurable
+import com.look4counter.queryeditor.settings.GlueQueryToolConfigurable
 import com.look4counter.queryeditor.settings.DatabaseKind
 import java.awt.Component
 import java.awt.Container
@@ -28,6 +29,135 @@ import javax.swing.JPasswordField
 import javax.swing.JTextField
 
 class DataSourceSettingsTest : BasePlatformTestCase() {
+    fun testCommentTemplateApplyResetAndPersistence() {
+        val configurable = GlueQueryToolConfigurable(project)
+        val comments = com.look4counter.queryeditor.settings.QueryCommentSettings.getInstance(project)
+        val original = comments.state
+        try {
+            comments.loadState(com.look4counter.queryeditor.settings.QueryCommentState())
+
+            var component = configurable.createComponent()
+            configurable.reset()
+            var input = control<javax.swing.JTextArea>(component, "query.comment.template")
+            assertEquals(com.look4counter.queryeditor.settings.QueryCommentState.DEFAULT_TEMPLATE, input.text)
+            assertTrue(input.text.contains("QueryId : ${'$'}{QUERY_ID} / ${'$'}{QUERY_DESCRIPTION}"))
+            input.text = "/* ${'$'}{QUERY_ID} */\n"
+            assertTrue(configurable.isModified())
+            assertEquals(original.template, comments.state.template)
+            configurable.reset()
+            assertEquals(comments.state.template, input.text)
+            input.text = "/* #{QUERY_DESCRIPTION}\n${'$'}{yyyy-MM-dd} */"
+            configurable.apply()
+            assertEquals(input.text, comments.state.template)
+            assertFalse(configurable.isModified())
+            val restored = com.look4counter.queryeditor.settings.QueryCommentSettings()
+            restored.loadState(XmlSerializer.deserialize(XmlSerializer.serialize(comments.state),
+                com.look4counter.queryeditor.settings.QueryCommentState::class.java))
+            assertEquals(comments.state, restored.state)
+            val detached = comments.state
+            detached.template = "changed"
+            assertEquals(input.text, comments.state.template)
+            input.text = "unsaved"
+            configurable.disposeUIResources()
+            component = configurable.createComponent()
+            configurable.reset()
+            input = control(component, "query.comment.template")
+            assertEquals(comments.state.template, input.text)
+            input.text = ""
+            configurable.apply()
+            assertEquals("", comments.state.template)
+        } finally { configurable.disposeUIResources(); comments.loadState(original) }
+    }
+
+    fun testFormattingStyleOptionsApplyResetAndPersistence() {
+        val configurable = GlueQueryToolConfigurable(project)
+        val formatting = com.look4counter.queryeditor.settings.QueryFormattingSettings.getInstance(project)
+        val original = formatting.state
+        try {
+            formatting.loadState(com.look4counter.queryeditor.settings.QueryFormattingState())
+
+            var component = configurable.createComponent()
+            configurable.reset()
+            val equals = control<JCheckBox>(component, "format.alignWhereEquals")
+            val aliases = control<JCheckBox>(component, "format.alignSelectAs")
+            assertFalse(equals.isSelected)
+            assertFalse(aliases.isSelected)
+            assertFalse(configurable.isModified())
+            equals.doClick()
+            assertTrue(configurable.isModified())
+            assertFalse(formatting.state.alignWhereEquals)
+            configurable.reset()
+            assertFalse(equals.isSelected)
+            aliases.doClick()
+            configurable.apply()
+            assertFalse(formatting.state.alignWhereEquals)
+            assertTrue(formatting.state.alignSelectAs)
+            assertFalse(configurable.isModified())
+            equals.doClick()
+            configurable.apply()
+            val xml = XmlSerializer.serialize(formatting.state)
+            val restored = com.look4counter.queryeditor.settings.QueryFormattingSettings()
+            restored.loadState(XmlSerializer.deserialize(xml, com.look4counter.queryeditor.settings.QueryFormattingState::class.java))
+            assertEquals(formatting.state, restored.state)
+            val detached = formatting.state
+            detached.alignWhereEquals = false
+            assertTrue(formatting.state.alignWhereEquals)
+            aliases.doClick()
+            configurable.disposeUIResources()
+            component = configurable.createComponent()
+            configurable.reset()
+            assertTrue(control<JCheckBox>(component, "format.alignWhereEquals").isSelected)
+            assertTrue(control<JCheckBox>(component, "format.alignSelectAs").isSelected)
+            assertFalse(configurable.isModified())
+        } finally { configurable.disposeUIResources(); formatting.loadState(original) }
+    }
+
+    fun testInvalidDatasourceDoesNotApplyFormattingDraft() {
+        val tool = GlueQueryToolConfigurable(project)
+        val formatting = com.look4counter.queryeditor.settings.QueryFormattingSettings.getInstance(project)
+        val original = formatting.state
+        try {
+            formatting.loadState(com.look4counter.queryeditor.settings.QueryFormattingState())
+            configurable = GlueQueryDatabaseConfigurable(project)
+            val component = configurable!!.createComponent()
+            configurable!!.reset()
+            tool.reset()
+            val toolComponent = tool.createComponent()
+            control<JCheckBox>(toolComponent, "format.alignWhereEquals").isSelected = true
+            control<JButton>(component, "datasource.add").doClick()
+            control<JTextField>(component, "datasource.url").text = "invalid"
+            try { configurable!!.apply(); fail("Expected validation error") } catch (_: com.intellij.openapi.options.ConfigurationException) { }
+            assertFalse(formatting.state.alignWhereEquals)
+            assertTrue(configurable!!.isModified())
+            assertTrue(tool.isModified())
+            tool.apply()
+            assertTrue(formatting.state.alignWhereEquals)
+            assertFalse(tool.isModified())
+            assertTrue(configurable!!.isModified())
+        } finally { tool.disposeUIResources(); formatting.loadState(original) }
+    }
+
+    fun testFormattingOnlyApplyPreservesCachedMetadata() {
+        val tool = GlueQueryToolConfigurable(project)
+        val formatting = com.look4counter.queryeditor.settings.QueryFormattingSettings.getInstance(project)
+        val original = formatting.state
+        val definition = DataSourceDefinition("cached", "Local", "jdbc:oracle:thin:@cached", "oracle.jdbc.OracleDriver", databaseKind = "ORACLE")
+        try {
+            formatting.loadState(com.look4counter.queryeditor.settings.QueryFormattingState())
+            settings.replaceDataSources(listOf(definition))
+            val metadata = com.look4counter.queryeditor.database.DatabaseMetadataService.getInstance(project)
+            val request = metadata.beginRefresh().single()
+            assertTrue(metadata.complete(request, com.look4counter.queryeditor.database.MetadataSnapshot(listOf(
+                com.look4counter.queryeditor.database.TableMetadata(null, null, "EMP", listOf("ID"))))))
+            val component = tool.createComponent()
+            tool.reset()
+            control<JCheckBox>(component, "format.alignSelectAs").isSelected = true
+            tool.apply()
+            assertEquals(listOf("EMP"), metadata.snapshot()!!.tableNames)
+            assertEquals(listOf(definition), settings.dataSources)
+        } finally { tool.disposeUIResources(); formatting.loadState(original) }
+    }
+
     fun testConnectionButtonUsesUnsavedDraftAndPasswordPolicyWithoutSaving() {
         val store = MemoryStore()
         val manager = DataSourcePasswordManager("settings-test", store)
@@ -37,7 +167,7 @@ class DataSourceSettingsTest : BasePlatformTestCase() {
         val requests = mutableListOf<Pair<DataSourceDefinition, String?>>()
         val results = mutableListOf<Boolean>()
         var failure: Exception? = null
-        configurable = object : GlueQueryEditorConfigurable(project) {
+        configurable = object : GlueQueryDatabaseConfigurable(project) {
             override fun createPasswordManager() = manager
             override fun testConnection(source: DataSourceDefinition, password: String?) {
                 assertFalse(ApplicationManager.getApplication().isDispatchThread)
@@ -73,7 +203,7 @@ class DataSourceSettingsTest : BasePlatformTestCase() {
         assertFalse(button.isEnabled)
     }
 
-    private var configurable: GlueQueryEditorConfigurable? = null
+    private var configurable: GlueQueryDatabaseConfigurable? = null
     private val settings get() = DataSourceSettingsService.getInstance(project)
 
     override fun setUp() {
@@ -99,7 +229,7 @@ class DataSourceSettingsTest : BasePlatformTestCase() {
         descendants(panel).filterIsInstance<T>().single { it.name == name }
 
     private fun openSettings(store: CredentialStore? = null): JComponent {
-        configurable = if (store == null) GlueQueryEditorConfigurable(project) else object : GlueQueryEditorConfigurable(project) {
+        configurable = if (store == null) GlueQueryDatabaseConfigurable(project) else object : GlueQueryDatabaseConfigurable(project) {
             override fun createPasswordManager(): DataSourcePasswordManager = DataSourcePasswordManager("settings-test", store)
         }
         val panel = configurable!!.createComponent()
@@ -118,18 +248,49 @@ class DataSourceSettingsTest : BasePlatformTestCase() {
     fun testSettingsHierarchyIsRegistered() {
         val stream = QueryDesignEditorProvider::class.java.getResourceAsStream("/META-INF/queryeditor.xml")!!
         val xml = stream.use { javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(it) }
-        val root = xml.getElementsByTagName("applicationConfigurable")
+        val root = xml.getElementsByTagName("groupConfigurable")
         assertTrue((0 until root.length).map { root.item(it) as org.w3c.dom.Element }
-            .any { it.getAttribute("id") == "com.look4counter.glueframework" && it.getAttribute("displayName") == "GlueFramework" })
-        val child = xml.getElementsByTagName("projectConfigurable")
-        assertTrue((0 until child.length).map { child.item(it) as org.w3c.dom.Element }.any {
-            it.getAttribute("parentId") == "com.look4counter.glueframework" && it.getAttribute("displayName") == "GlueQueryEditor"
+            .any { it.getAttribute("id") == "com.look4counter.glueframework" &&
+                it.getAttribute("descriptionKey") == "settings.group.description" })
+        assertTrue((0 until root.length).map { root.item(it) as org.w3c.dom.Element }.any {
+            it.getAttribute("id") == "com.look4counter.glueframework.queryeditor" &&
+                it.getAttribute("parentId") == "com.look4counter.glueframework"
         })
         val group = com.intellij.openapi.options.ex.ConfigurableExtensionPointUtil.getConfigurableGroup(project, true)
         val framework = group.configurables.single { it.displayName == "GlueFramework" }
         assertTrue(framework is com.intellij.openapi.options.Configurable.Composite)
+        assertTrue(framework is com.intellij.openapi.options.ConfigurableGroup)
+        assertEquals("GlueFramework의 쿼리 편집기와 모델 편집기를 설정합니다. 아래 항목을 선택하여 세부 설정을 변경할 수 있습니다.",
+            (framework as com.intellij.openapi.options.ConfigurableGroup).description)
+        // 자체 화면 대신 플랫폼 기본 설명·하위 설정 링크 화면을 사용한다.
+        assertNull(framework.createComponent())
         assertEquals(listOf("GlueModelEditor", "GlueQueryEditor"),
             (framework as com.intellij.openapi.options.Configurable.Composite).configurables.map { it.displayName }.sorted())
+        val queryEditor = framework.configurables.single { it.displayName == "GlueQueryEditor" }
+        assertTrue(queryEditor is com.intellij.openapi.options.Configurable.Composite)
+        assertTrue(queryEditor is com.intellij.openapi.options.ConfigurableGroup)
+        assertEquals("쿼리 편집기의 SQL 포매팅과 주석 템플릿은 Tool에서, 데이터소스와 메타데이터는 Database에서 설정합니다.",
+            (queryEditor as com.intellij.openapi.options.ConfigurableGroup).description)
+        assertNull(queryEditor.createComponent())
+        val pages = (queryEditor as com.intellij.openapi.options.Configurable.Composite).configurables
+        assertEquals(listOf("Database", "Tool"), pages.map { it.displayName }.sorted())
+        val tool = pages.single { it.displayName == "Tool" }
+        val database = pages.single { it.displayName == "Database" }
+        try {
+            val toolPanel = tool.createComponent()!!
+            val databasePanel = database.createComponent()!!
+            tool.reset()
+            database.reset()
+            assertNotNull(control<javax.swing.JTextArea>(toolPanel, "query.comment.template"))
+            assertFalse(descendants(toolPanel).any { it.name == "datasource.list" })
+            assertNotNull(control<JList<*>>(databasePanel, "datasource.list"))
+            assertFalse(descendants(databasePanel).any { it.name == "query.comment.template" })
+            assertFalse(tool.isModified)
+            assertFalse(database.isModified)
+        } finally {
+            tool.disposeUIResources()
+            database.disposeUIResources()
+        }
     }
 
     fun testMultipleSourcesApplyResetDeleteAndCancel() {

@@ -13,13 +13,23 @@
                   extensions="glue_sql"/>
         <fileEditorProvider implementation="com.look4counter.queryeditor.QueryDesignEditorProvider"/>
         <fileEditorProvider implementation="com.look4counter.queryeditor.QuerySourceEditorProvider"/>
-        <applicationConfigurable id="com.look4counter.glueframework"
-                                 parentId="root" displayName="GlueFramework"
-                                 instance="com.look4counter.queryeditor.settings.GlueFrameworkConfigurable"/>
-        <projectConfigurable id="com.look4counter.glueframework.queryeditor"
-                             parentId="com.look4counter.glueframework" displayName="GlueQueryEditor"
+        <groupConfigurable id="com.look4counter.glueframework"
+                           bundle="messages.GlueFrameworkBundle"
+                           displayNameKey="settings.group.name"
+                           descriptionKey="settings.group.description"/>
+        <groupConfigurable id="com.look4counter.glueframework.queryeditor"
+                           parentId="com.look4counter.glueframework"
+                           bundle="messages.GlueFrameworkBundle"
+                           displayNameKey="settings.queryeditor.name"
+                           descriptionKey="settings.queryeditor.description"/>
+        <projectConfigurable id="com.look4counter.glueframework.queryeditor.tool"
+                             groupId="com.look4counter.glueframework.queryeditor" displayName="Tool"
                              nonDefaultProject="true"
-                             instance="com.look4counter.queryeditor.settings.GlueQueryEditorConfigurable"/>
+                             instance="com.look4counter.queryeditor.settings.GlueQueryToolConfigurable"/>
+        <projectConfigurable id="com.look4counter.glueframework.queryeditor.database"
+                             groupId="com.look4counter.glueframework.queryeditor" displayName="Database"
+                             nonDefaultProject="true"
+                             instance="com.look4counter.queryeditor.settings.GlueQueryDatabaseConfigurable"/>
     </extensions>
     <applicationListeners>
         <listener class="com.look4counter.queryeditor.QuerySaveListener"

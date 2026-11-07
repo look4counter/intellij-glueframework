@@ -40,7 +40,8 @@ class ModelDiagramWireCreationTest : BasePlatformTestCase() {
         assertEquals(1, created.size)
         assertEquals(start, created.single().start)
         assertEquals(end, created.single().end)
-        assertEquals(DiagramPoint(333.0, 212.0), created.single().lastRelativePoint)
+        assertEquals(DiagramPoint(100.0, 55.0), created.single().firstRelativePoint)
+        assertEquals(DiagramPoint(328.0, 208.0), created.single().lastRelativePoint)
         assertNull(canvas.wireCreationPreview)
         assertTrue(canvas.wireCreationMode)
     }
@@ -63,8 +64,8 @@ class ModelDiagramWireCreationTest : BasePlatformTestCase() {
         assertEquals(2, count)
     }
 
-    fun testInvalidReleaseTargetsDoNotCreateWiresAndKeepStart() {
-        for ((x, y) in listOf(260 to 160, 120 to 55, 470 to 70, -10 to 55, 620 to 200)) {
+    fun testOutsideAndMiniMapReleasesDoNotCreateWiresAndKeepStart() {
+        for ((x, y) in listOf(470 to 70, -10 to 55, 620 to 200)) {
             val canvas = canvas()
             var count = 0
             canvas.onWireCreateRequested = { count++ }
@@ -124,7 +125,7 @@ class ModelDiagramWireCreationTest : BasePlatformTestCase() {
         assertEquals(0, count)
     }
 
-    fun testZoomedReleaseUsesFinalModelCoordinates() {
+    fun testZoomedReleaseUsesPressModelCoordinates() {
         val canvas = canvas()
         canvas.setZoom(1.5)
         canvas.navigateTo(DiagramPoint(200.0, 150.0))
@@ -137,6 +138,33 @@ class ModelDiagramWireCreationTest : BasePlatformTestCase() {
         mouse(canvas, MouseEvent.MOUSE_DRAGGED, 498, 294)
         mouse(canvas, MouseEvent.MOUSE_RELEASED, 498, 294)
         assertEquals(end, created?.end)
-        assertEquals(DiagramPoint(332.0, 212.66666666666666), created?.lastRelativePoint)
+        assertEquals(DiagramPoint(328.0, 208.66666666666666), created?.lastRelativePoint)
+    }
+
+    fun testPressTargetSurvivesReleaseOverEmptySpaceOrDifferentChild() {
+        for ((x, y) in listOf(260 to 160, 120 to 55)) {
+            val canvas = canvas()
+            val created = mutableListOf<DiagramWire>()
+            canvas.onWireCreateRequested = { created.add(it) }
+            mouse(canvas, MouseEvent.MOUSE_PRESSED, 100, 55)
+            mouse(canvas, MouseEvent.MOUSE_DRAGGED, 330, 210)
+            mouse(canvas, MouseEvent.MOUSE_RELEASED, 330, 210)
+            mouse(canvas, MouseEvent.MOUSE_PRESSED, 328, 208)
+            mouse(canvas, MouseEvent.MOUSE_DRAGGED, x, y)
+            mouse(canvas, MouseEvent.MOUSE_RELEASED, x, y)
+            mouse(canvas, MouseEvent.MOUSE_CLICKED, x, y)
+            assertEquals(1, created.size)
+            assertEquals(start, created.single().start)
+            assertEquals(end, created.single().end)
+            assertEquals(DiagramPoint(328.0, 208.0), created.single().lastRelativePoint)
+        }
+    }
+
+    fun testEmptyPressCannotSelectChildAtRelease() {
+        val canvas = canvas()
+        mouse(canvas, MouseEvent.MOUSE_PRESSED, 260, 160)
+        mouse(canvas, MouseEvent.MOUSE_RELEASED, 100, 55)
+        mouse(canvas, MouseEvent.MOUSE_MOVED, 330, 210)
+        assertNull(canvas.wireCreationPreview)
     }
 }

@@ -51,6 +51,8 @@ class ChildCreationToolbarTest : BasePlatformTestCase() {
             assertSame(secondComponent, secondEvent.presentation.getClientProperty(CustomComponentAction.COMPONENT_KEY))
             assertEquals("FinalState", firstEvent.presentation.text)
             assertEquals("InitialState", secondEvent.presentation.text)
+            assertEquals("Activity 추가", firstEvent.presentation.description)
+            assertEquals("Activity 추가", secondEvent.presentation.description)
         }
         assertNotSame(firstComponent, secondComponent)
     }
@@ -61,7 +63,13 @@ class ChildCreationToolbarTest : BasePlatformTestCase() {
         val event = event(toolbar.splitAction)
         assertEquals(ActionUpdateThread.EDT, toolbar.splitAction.actionUpdateThread)
         toolbar.splitAction.update(event)
-        assertEquals("빈 Activity", event.presentation.text)
+        assertEquals("Empty Activity", event.presentation.text)
+        assertEquals("Activity 추가", event.presentation.description)
+        assertEquals("Wire 추가", toolbar.wireCreationAction.templatePresentation.description)
+        assertEquals("정렬 토글", toolbar.snapAction.templatePresentation.description)
+        assertEquals("직각 Wire 토글", toolbar.orthogonalAction.templatePresentation.description)
+        assertEquals("파일 속성", toolbar.diagramPropertiesAction.templatePresentation.description)
+        assertTrue(toolbar.kindActions.all { it.templatePresentation.description == "Activity 선택" })
         assertFalse(Toggleable.isSelected(event.presentation))
         toolbar.splitAction.actionPerformed(event)
         toolbar.splitAction.update(event)
@@ -70,6 +78,7 @@ class ChildCreationToolbarTest : BasePlatformTestCase() {
         toolbar.selectPreset(ActivityPreset("Preset A"))
         toolbar.splitAction.update(event)
         assertEquals("Preset A", event.presentation.text)
+        assertEquals("Activity 추가", event.presentation.description)
         assertNull(event.presentation.icon)
         state.editable = false
         toolbar.splitAction.update(event)

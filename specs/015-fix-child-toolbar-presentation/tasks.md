@@ -1,4 +1,4 @@
-﻿# 작업 목록: Child 생성 툴바 초기화 오류 수정
+# 작업 목록: Child 생성 툴바 초기화 오류 수정
 
 ## 1단계: 준비
 
@@ -21,4 +21,11 @@
 ## 의존성과 구현 전략
 
 T001 → T002 → T003 → T004 → T005 → T006 순서로 수행한다. 같은 생성 컨트롤을 변경하므로 구현은 순차 진행한다. 사용자 이야기 1 전체가 최소 제공 범위다. 서로 다른 기존 회귀 클래스는 일괄 실행할 수 있다.
+
+## 5단계: 표시 이름과 안내 정리
+
+- [x] T007 [US1] modeleditor/src/main/kotlin/com/look4counter/modeleditor/ChildCreationToolbar.kt의 Empty Activity·Activity 추가·Activity 선택 및 네 버튼 마우스 안내를 FR-005의 문자열로 갱신한다.
+- [x] T008 [US1] src/test/kotlin/com/look4counter/ChildCreationToolbarTest.kt 및 ModelDiagramPropertiesTest.kt의 기존 이름 기대와 액션 안내 검증을 갱신하고 툴바·속성 회귀 및 패키지 검증 후 quickstart.md에 기록하고 수렴을 확인한다. FR-005, SC-002.
+
+T007 → T008 순서로 수행한다. 문구 변경에 새 테스트 클래스를 추가하지 않는다.
 
