@@ -5,6 +5,66 @@ import com.look4counter.queryeditor.sql.SqlFormatter
 import com.look4counter.queryeditor.sql.SqlFormattingOptions
 
 class SqlFormatterTest : BasePlatformTestCase() {
+    fun testParenthesizedOnUsesConditionCountForIndentation() {
+        val bodies = listOf(
+            "t.id=s.id" to "    t.id = s.id",
+            "t.id=s.id\nAND t.department_code=s.department_code" to
+                "        t.id = s.id\n    AND t.department_code = s.department_code",
+            "t.id=s.id\nOR t.department_code=s.department_code" to
+                "        t.id = s.id\n     OR t.department_code = s.department_code",
+            "t.id BETWEEN 1 AND 2" to "    t.id BETWEEN 1 AND 2",
+            "t.id BETWEEN 1 AND 2\nAND t.active=1" to
+                "        t.id BETWEEN 1 AND 2\n    AND t.active = 1",
+            "t.id=(SELECT id FROM src WHERE x=1 AND y=2)" to
+                "    t.id = (SELECT id FROM src WHERE x = 1 AND y = 2)",
+            "t.id=CASE WHEN s.x=1 AND s.y=2 THEN 1 ELSE 0 END" to
+                "    t.id = CASE WHEN s.x = 1 AND s.y = 2 THEN 1 ELSE 0 END"
+        )
+        for (prefix in listOf("MERGE INTO employee t\nUSING employee_stage s", "SELECT *\nFROM employee t JOIN employee_stage s")) {
+            for ((body, expectedBody) in bodies) {
+                val sql = "$prefix\nON (\n$body\n)"
+                val plain = SqlFormatter.format(sql).sql!!
+                assertEquals(expectedBody, plain.substringAfter("ON (\n").substringBeforeLast("\n)"))
+                for (enabled in listOf(false, true)) {
+                    val options = SqlFormattingOptions(enabled)
+                    val result = SqlFormatter.format(sql, options).sql!!
+                    assertEquals(tokenLines(sql), tokenLines(result))
+                    assertEquals(result, SqlFormatter.format(result, options).sql)
+                    val lines = result.substringAfter("ON (\n").lines()
+                    val firstColumn = if (body.contains("\n")) 8 else 4
+                    assertEquals(firstColumn, lines.first().indexOf("t.id"))
+                    if (enabled && body.startsWith("t.id=s.id\n")) {
+                        assertEquals(lines[0].indexOf('='), lines[1].indexOf('='))
+                    }
+                }
+            }
+        }
+    }
+
+    fun testUpdateWhereKeywordEndsMatchStandaloneAndMergeUpdate() {
+        val update = "UPDATE employee\nSET name='Kim'\n, salary=5000\nWHERE active=1\nAND department_code='DEV'\nOR id=10;"
+        val merge = "MERGE INTO employee t\nUSING employee_stage s\nON (t.id=s.id)\nWHEN MATCHED THEN\nUPDATE SET t.name=s.name\n, t.department_code=s.department_code\n, t.salary=s.salary\nWHERE t.active=1\nAND t.department_code='DEV'\nOR t.id=10\nWHEN NOT MATCHED THEN\nINSERT (id) VALUES (s.id);"
+        for (sql in listOf(update, merge)) {
+            for (enabled in listOf(false, true)) {
+                val options = SqlFormattingOptions(enabled)
+                val result = SqlFormatter.format(sql, options).sql!!
+                val lines = result.lines()
+                val updateLine = lines.single { it.trimStart().startsWith("UPDATE") }
+                val keywordEnd = updateLine.indexOf("UPDATE") + "UPDATE".length
+                for (keyword in listOf("WHERE", "AND", "OR")) {
+                    val line = lines.single { it.trimStart().startsWith(keyword) }
+                    assertEquals("$keyword in:\n$result", keywordEnd, line.indexOf(keyword) + keyword.length)
+                }
+                if (enabled) {
+                    val conditions = lines.filter { it.trimStart().startsWith("WHERE") || it.trimStart().startsWith("AND") || it.trimStart().startsWith("OR") }
+                    assertEquals(1, conditions.map { it.indexOf('=') }.toSet().size)
+                }
+                assertEquals(tokenLines(sql), tokenLines(result))
+                assertEquals(result, SqlFormatter.format(result, options).sql)
+            }
+        }
+    }
+
     fun testMixedCaseTokensRemainUnchangedWithAllAlignmentOptions() {
         val sql = "WiTh C aS (\nSeLeCt MiXeD aS x, CASE WhEn Flag=1 ThEn 'aS' ElSe 'SELECT' EnD aS y\nFrOm MixedTable\n)\nselect x,y FROM C\nwhere x=1\nAnD y=2"
         for (options in listOf(SqlFormattingOptions(), SqlFormattingOptions(true, true))) {
@@ -171,13 +231,52 @@ class SqlFormatterTest : BasePlatformTestCase() {
         assertEquals(result, SqlFormatter.format(result, SqlFormattingOptions(true, true)).sql)
     }
 
-    fun testWhereAlignmentHandlesParenthesesAndLeavesUpdateSetUnchanged() {
-        val sql = "update T set A=1,LONG=2\nwhere (AB=AB)\nand HELO=HI"
-        val plain = SqlFormatter.format(sql).sql!!
+    fun testWhereAlignmentHandlesParenthesesAndAlignsUpdateSet() {
+        val sql = "update T\nset A=1\n, LONG=2\nwhere (AB=AB)\nand HELO=HI"
         val result = SqlFormatter.format(sql, SqlFormattingOptions(alignWhereEquals = true)).sql!!
-        assertEquals(plain.substringBefore("where"), result.substringBefore("where"))
+        assertEquals(result.lines()[1].indexOf('='), result.lines()[2].indexOf('='))
         assertTrue(result.contains("where (AB  = AB)\n   and HELO = HI"))
         assertEquals(result, SqlFormatter.format(result, SqlFormattingOptions(alignWhereEquals = true)).sql)
+    }
+
+    fun testEqualsAlignmentAcrossConditionsAndInsertSelect() {
+        val sql = "INSERT INTO dst\nSELECT a.id\nFROM a JOIN b\nON a.id=b.id\nAND a.long_name=b.name\nWHERE a.x=1\nAND a.medium=2\nGROUP BY a.id\nHAVING COUNT(*)=1\nAND SUM(a.amount)=2"
+        val result = SqlFormatter.format(sql, SqlFormattingOptions(true)).sql!!
+        val lines = result.lines()
+        for (row in listOf(3, 5, 8)) assertEquals(lines[row].indexOf('='), lines[row + 1].indexOf('='))
+        assertEquals(tokenLines(sql), tokenLines(result))
+        assertEquals(result, SqlFormatter.format(result, SqlFormattingOptions(true)).sql)
+        assertFalse(result == SqlFormatter.format(sql).sql)
+    }
+
+    fun testMergeSetFirstLineAndIndependentEqualsGroups() {
+        val sql = "MERGE INTO dst a\nUSING src b\nON (a.id=b.id\nAND a.very_long_key=b.k)\nWHEN MATCHED THEN UPDATE SET\na.x=b.x\n, a.name=b.name\nWHERE a.ok=1\nAND a.enabled=1"
+        for (enabled in listOf(false, true)) {
+            val options = SqlFormattingOptions(enabled)
+            val result = SqlFormatter.format(sql, options).sql!!
+            val lines = result.lines()
+            assertEquals(7, lines[5].indexOf("a.x"))
+            assertEquals(lines[5].indexOf("a.x"), lines[6].indexOf("a.name"))
+            if (enabled) {
+                assertEquals(lines[2].indexOf('='), lines[3].indexOf('='))
+                assertEquals(lines[5].indexOf('='), lines[6].indexOf('='))
+                assertEquals(lines[7].indexOf('='), lines[8].indexOf('='))
+                assertTrue(lines[2].indexOf('=') > lines[5].indexOf('='))
+            }
+            assertEquals(tokenLines(sql), tokenLines(result))
+            assertEquals(result, SqlFormatter.format(result, options).sql)
+        }
+    }
+
+    fun testUpdateSetFirstLineAcrossCommentAndSubqueryIsolation() {
+        val sql = "UPDATE dst\nSET\n-- keep\na= (SELECT x FROM t\nWHERE very_long_column=1\nAND y=2)\n, longer=3\nWHERE id=1\nAND z=2"
+        val result = SqlFormatter.format(sql, SqlFormattingOptions(true)).sql!!
+        val lines = result.lines()
+        assertEquals(7, lines[3].indexOf("a"))
+        assertEquals(lines[3].indexOf('='), lines[6].indexOf('='))
+        assertEquals(lines[4].indexOf('='), lines[5].indexOf('='))
+        assertEquals(lines[7].indexOf('='), lines[8].indexOf('='))
+        assertEquals(result, SqlFormatter.format(result, SqlFormattingOptions(true)).sql)
     }
 
     fun testPivotMatchesUserExampleIncludingAdjacentSubqueries() {

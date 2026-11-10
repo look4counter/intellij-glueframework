@@ -23,7 +23,7 @@ object SqlColumnValidator {
         private val problems = linkedMapOf<Int, SqlColumnProblem>()
         private var steps = 0
         private val unknown = Shape(emptyList(), true)
-        private val grammar = setOf("MATCHED", "THEN", "MERGE", "DELETE", "INSERT", "UPDATE", "SET", "VALUES",
+        private val grammar = setOf("NULL", "MATCHED", "THEN", "MERGE", "DELETE", "INSERT", "UPDATE", "SET", "VALUES",
             "ROWNUM", "ROWID", "ORA_ROWSCN", "LEVEL", "CONNECT_BY_ISLEAF", "CONNECT_BY_ISCYCLE", "SYSDATE", "SYSTIMESTAMP", "UID",
             "AT", "TIME", "ZONE", "FILTER", "PARTITION", "OVER", "ASC", "DESC", "NULLS", "FIRST", "LAST", "RETURNING")
 

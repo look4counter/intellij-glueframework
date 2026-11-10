@@ -4,13 +4,15 @@ import com.intellij.openapi.progress.ProgressManager
 import com.look4counter.queryeditor.database.MetadataSnapshot
 import java.util.IdentityHashMap
 import java.util.Locale
+import com.intellij.openapi.util.TextRange
 
 data class SqlTraceEntry(val line: Int, val text: String, val offset: Int) {
     override fun toString() = "$line: $text"
 }
 
 data class SqlTraceResult(val entries: List<SqlTraceEntry>, val message: String? = null,
-                          val selectedOffset: Int? = null, val graph: SqlTraceGraph = SqlTraceGraph())
+                          val selectedOffset: Int? = null, val graph: SqlTraceGraph = SqlTraceGraph(),
+                          val occurrences: List<TextRange> = emptyList())
 
 object SqlColumnTrace {
     fun analyze(text: String, offset: Int, metadata: MetadataSnapshot?): SqlTraceResult {
@@ -30,11 +32,13 @@ object SqlColumnTrace {
         val building = mutableSetOf<Node>()
         var steps = 0
 
-        class Node(val offset: Int? = null, val name: String = "") {
+        class Node(var offset: Int?, val name: String, val column: SqlIdentifier) {
             val inputs = linkedSetOf<Node>()
             val consumers = linkedSetOf<Node>()
             var message: String? = null
-            fun add(input: Node) { inputs.add(input); input.consumers.add(this) }
+            fun add(input: Node) {
+                if (column.matches(input.column)) { inputs.add(input); input.consumers.add(this) }
+            }
         }
 
         data class Output(val name: SqlIdentifier, val token: SqlToken, val expression: List<SqlToken>,
@@ -79,7 +83,10 @@ object SqlColumnTrace {
             val selectedOutputs = outputs(scope).indices.filter { outputIndex ->
                 val output = outputs(scope)[outputIndex]
                 output.token.start == token.start || tokens.getOrNull(index + 1)?.symbol(".") != true &&
-                    output.expression.any { it.start == token.start }
+                    output.expression.any { it.start == token.start } &&
+                    (token.identifier == null || output.name.matches(token.identifier) ||
+                        !token.identifier.quoted && token.text.uppercase(Locale.ROOT) in SqlKeywords.words &&
+                        tokens.getOrNull(index - 1)?.symbol(".") != true)
             }
             // A condition can select the column to inspect without becoming a displayed stage.
             if (selectedOutputs.isEmpty() && references[token.start] == null && token.identifier != null &&
@@ -92,6 +99,9 @@ object SqlColumnTrace {
             }
             val seeds = selectedOutputs.map { outputNode(scope, it) }.ifEmpty { listOfNotNull(references[token.start]) }
             if (seeds.isEmpty()) return SqlTraceResult(emptyList())
+            if (selectedOutputs.isEmpty() && scope.statement == "SELECT" && scope.clause(token.start) == "SELECT") {
+                references[token.start]?.offset = token.start
+            }
             val connected = linkedSetOf<Node>()
             val queue = ArrayDeque<Node>().apply { addAll(seeds) }
             while (queue.isNotEmpty()) {
@@ -127,7 +137,27 @@ object SqlColumnTrace {
             }
             val graph = SqlTraceGraphBuilder.build(connected, { it.inputs }, { node -> node.offset?.let(::entry) },
                 { "컬럼 ${it.name}" }, selectedNode)
-            return SqlTraceResult(offsets.map(::entry), message, selectedOffset, graph)
+            val occurrenceOffsets = references.filterValues { it in connected }.keys.toMutableSet()
+            slots.values.filter { it in connected }.mapNotNullTo(occurrenceOffsets) { it.offset }
+            if (token.identifier != null) occurrenceOffsets.add(token.start)
+            tokens.forEachIndexed { i, candidate ->
+                if (candidate.start in declarations || candidate.identifier == null ||
+                    tokens.getOrNull(i + 1)?.symbol(".") == true || tokens.getOrNull(i + 1)?.symbol("(") == true ||
+                    !candidate.identifier.quoted && candidate.text.uppercase(Locale.ROOT) in SqlKeywords.words &&
+                    tokens.getOrNull(i - 1)?.symbol(".") != true) return@forEachIndexed
+                val current = parser.scopes.filter { it.start <= candidate.start && candidate.end <= it.end }
+                    .minByOrNull { it.end - it.start } ?: return@forEachIndexed
+                if (current.statement != "SELECT" || current.clause(candidate.start) !in setOf("WHERE", "ON", "HAVING", "GROUP", "ORDER") ||
+                    !isOutputScope(current)) return@forEachIndexed
+                var first = i
+                while (first >= 2 && tokens[first - 1].symbol(".") && tokens[first - 2].identifier != null) first -= 2
+                val path = sqlPath(tokens.subList(first, i + 1)) ?: return@forEachIndexed
+                val reference = reference(current, path, candidate)
+                if (reference in connected || reference.inputs.any { it in connected }) occurrenceOffsets.add(candidate.start)
+            }
+            val occurrences = tokens.filter { it.start in occurrenceOffsets && it.identifier != null && it.start !in declarations }
+                .map { TextRange(it.start, it.end) }
+            return SqlTraceResult(offsets.map(::entry), message, selectedOffset, graph, occurrences)
         }
 
         fun check() {
@@ -156,7 +186,7 @@ object SqlColumnTrace {
             val output = outputs(scope)[index]
             val name = output.source?.reference?.takeIf { it.isNotEmpty() }?.let { "$it.${output.name.spelling}" }
                 ?: output.name.spelling
-            val node = Node(output.token.start, name)
+            val node = Node(output.token.start, name, output.name)
             slots[key] = node
             return build(node) {
                 if (output.source != null) node.add(source(output.source, output.name))
@@ -203,9 +233,11 @@ object SqlColumnTrace {
             references[token.start]?.let { return it }
             check()
             val projected = outputs(scope).any { output -> output.expression.any { it.start == token.start } }
+            val renamed = outputs(scope).any { output -> output.expression.any { it.start == token.start } && !output.name.matches(path.last()) }
             val node = Node(if (scope.statement != "SELECT") token.start
+                else if (projected && renamed) token.start
                 else if (projected || scope.clause(token.start) != "SELECT") null else token.start,
-                path.joinToString(".") { it.spelling })
+                path.joinToString(".") { it.spelling }, path.last())
             references[token.start] = node
             val name = path.last()
             if (path.size == 1 && scope.clause(token.start) in setOf("ORDER", "GROUP")) {
@@ -249,7 +281,7 @@ object SqlColumnTrace {
             val declaredInDml = source.cte == null && source.query == null && !source.callable &&
                 parser.scopes.any { scope -> scope.statement != "SELECT" && scope.sources.any { it === source } }
             val node = Node(if (declaredInDml) source.nameTokens.lastOrNull()?.start else null,
-                "${source.reference}.${name.spelling}")
+                "${source.reference}.${name.spelling}", name)
             columns[canonical] = node
             return build(node) {
                 val query = source.cte?.query ?: source.query ?: return@build

@@ -41,3 +41,20 @@ SELECT·CTE·파생 쿼리의 컬럼 전달 경로는 기존 규칙을 따른다
 출처에서 선택해도 사용처가 포함되도록 현재 문장의 변경문 참조 전체를 먼저 수집한다. SELECT의 실제 값·표현식 토큰을 선택하면 출력 슬롯을 시작점으로 사용한다. 사용자 MERGE 예제의 TEST·'B'·b.TEST, a.deptno의 모든 참조와 트리 선택 ID를 검증했다. 문자열·숫자·파라미터·CASE 값, CTE·파생 전달과 복수 분기, 다른 문장·VALUES·주석 격리 및 선언 별칭이 컬럼으로 잘못 수집되지 않는 것도 확인했다. 키워드 목록과 이름이 겹치는 b.result 같은 한정 컬럼도 포함한다.
 
 명세·명확화·계획·작업을 FR-009·FR-010과 T020~T023으로 갱신하고 구현 전 대응을 확인했다. 구현 후 최신 요구사항 10개와 관련 계획·작업의 수렴을 대조했으며 추가 누락은 없다. 메인·테스트 컴파일과 174개 회귀가 실패·오류·건너뜀 없이 통과했고 diff 검사도 통과했다. 실제 사용자 IDE 수동 조작은 수행하지 않았다.
+## 후속 검증 절차
+
+등호 정렬 옵션을 켜고 WHERE·JOIN ON·MERGE ON·HAVING·UPDATE SET·MERGE SET·INSERT SELECT를 포맷한다. 각 절 안 등호의 열이 같고 SET 뒤 별도 줄의 첫 컬럼이 후속 컬럼과 맞는지 확인한다. 옵션을 꺼서 추가 등호 공백이 사라지는지, 반복 실행 결과와 원래 줄바꿈·대소문자가 보존되는지 확인한다. 자동 검증 명령은 위 포매터·편집기 테스트를 사용한다.
+
+## 2026-11-10 후속 검증 결과
+
+로컬 Gradle 9.7.1과 캐시된 IDEA 2025.3.6.1의 JBR 21을 사용해 SqlFormatterTest 및 QuerySqlEditorTest를 실행했고 BUILD SUCCESSFUL을 확인했다. 실행 시 GRADLE_USER_HOME을 프로젝트의 .gradle-user-home으로 지정하고 기존 오프라인 초기화 설정 및 -Porg.gradle.java.installations.paths로 캐시 JBR 경로를 사용했다.
+
+새 조건절·SET·INSERT SELECT·MERGE 첫 대입문·주석·서브쿼리 격리·멱등성 회귀와 기존 편집기 회귀가 통과했다. 저장 필드와 기본값은 그대로 유지했다. 실제 사용자 IDE 수동 조작은 수행하지 않았다.
+
+## UPDATE와 ON 후속 검증 안내
+
+사용자가 제공한 MERGE에서 WHERE·AND·OR 끝이 UPDATE 끝 열과 같은지 확인한다. ON 괄호에 단일 조건만 있으면 4칸, AND·OR로 연결한 복수 조건이면 첫 조건 8칸·AND 4칸·OR 5칸인지 확인한다. BETWEEN의 AND 및 CASE·서브쿼리 내부 조건으로 첫 조건 들여쓰기가 바뀌면 안 된다. 일반 UPDATE 및 JOIN ON에도 동일 기준을 검증한다. 옵션 켜짐·꺼짐과 반복 포맷을 함께 실행한다.
+
+## 2026-11-10 UPDATE·ON 보정 검증 결과
+
+변경 전 신규 UPDATE 끝 열 회귀가 MERGE WHERE의 기대 열 6·실제 열 5로 실패하여 재현을 확인했다. 수정 후 동일한 로컬 Gradle·캐시 JBR 21·오프라인 초기화 설정으로 SqlFormatterTest 45개와 QuerySqlEditorTest 47개, 총 92개가 실패·오류·건너뜀 없이 통과했다. ON의 단일·복수·OR·BETWEEN·CASE·서브쿼리 격리 및 옵션 양쪽 상태·멱등성과 일반 UPDATE·MERGE의 끝 열을 검증했다. 사용자 IDE의 수동 조작은 수행하지 않았다.

@@ -74,10 +74,9 @@ class SqlColumnTraceTest : BasePlatformTestCase() {
 
     fun testInsertSelectKeepsCtePathSeparateFromTargetColumns() {
         val sql = "WITH s AS (SELECT old_id AS id, label FROM src)\nINSERT INTO dst (new_id, title)\nSELECT id, label FROM s\nUNION ALL\nSELECT other_id, other_label FROM other"
-        for (position in listOf(sql.indexOf("old_id"), sql.indexOf("SELECT id") + 7)) {
-            assertEquals(listOf(sql.indexOf("AS id") + 3, sql.indexOf("SELECT id") + 7),
-                SqlColumnTrace.analyze(sql, position + 1, null).entries.map { it.offset })
-        }
+        assertEquals(listOf(sql.indexOf("old_id")), SqlColumnTrace.analyze(sql, sql.indexOf("old_id") + 1, null).entries.map { it.offset })
+        assertEquals(listOf(sql.indexOf("AS id") + 3, sql.indexOf("SELECT id") + 7),
+            SqlColumnTrace.analyze(sql, sql.indexOf("SELECT id") + 8, null).entries.map { it.offset })
         val target = sql.indexOf("new_id")
         assertEquals(listOf(sql.indexOf("dst"), target), SqlColumnTrace.analyze(sql, target + 1, null).entries.map { it.offset })
         assertEquals(listOf(sql.indexOf("other_id")),
@@ -95,10 +94,9 @@ class SqlColumnTraceTest : BasePlatformTestCase() {
 
     fun testScalarSelectKeepsInnerCtePathSeparateFromUpdateTarget() {
         val sql = "UPDATE emp SET salary=(WITH s AS (SELECT old_pay AS pay FROM payroll) SELECT pay FROM s)\nWHERE EXISTS (SELECT hidden FROM other)"
-        for (position in listOf(sql.indexOf("old_pay"), sql.indexOf("SELECT pay") + 7)) {
-            assertEquals(listOf(sql.indexOf("AS pay") + 3, sql.indexOf("SELECT pay") + 7),
-                SqlColumnTrace.analyze(sql, position + 1, null).entries.map { it.offset })
-        }
+        assertEquals(listOf(sql.indexOf("old_pay")), SqlColumnTrace.analyze(sql, sql.indexOf("old_pay") + 1, null).entries.map { it.offset })
+        assertEquals(listOf(sql.indexOf("AS pay") + 3, sql.indexOf("SELECT pay") + 7),
+            SqlColumnTrace.analyze(sql, sql.indexOf("SELECT pay") + 8, null).entries.map { it.offset })
         val target = sql.indexOf("salary")
         assertEquals(listOf(sql.indexOf("emp"), target), SqlColumnTrace.analyze(sql, target + 1, null).entries.map { it.offset })
         assertTrue(SqlColumnTrace.analyze(sql, sql.indexOf("hidden") + 1, null).entries.isEmpty())
@@ -137,7 +135,7 @@ class SqlColumnTraceTest : BasePlatformTestCase() {
                 assertEquals(expression, expected, SqlColumnTrace.analyze(sql, position, null).entries.map { it.offset })
             }
             if (expression.startsWith("CASE")) {
-                assertEquals(expected, SqlColumnTrace.analyze(sql, sql.indexOf("THEN pay") + 6, null).entries.map { it.offset })
+                assertEquals(listOf(sql.indexOf("THEN pay") + 5), SqlColumnTrace.analyze(sql, sql.indexOf("THEN pay") + 6, null).entries.map { it.offset })
             }
         }
         val outside = "INSERT INTO dst (value) VALUES ('B'); SELECT 'B' AS value FROM src -- 'B'"
@@ -145,16 +143,20 @@ class SqlColumnTraceTest : BasePlatformTestCase() {
         assertTrue(SqlColumnTrace.analyze(outside, outside.lastIndexOf("'B'") + 1, null).entries.isEmpty())
     }
     fun testGraphKeepsColumnBranchesAndRejoiningSeparate() {
-        val sql = "WITH a AS (SELECT id FROM physical), b AS (SELECT id AS b_id FROM a), " +
-            "c AS (SELECT id AS c_id FROM a) SELECT b.b_id+c.c_id AS total FROM b JOIN c ON b.b_id=c.c_id"
+        val sql = "WITH a AS (SELECT id FROM physical), b AS (SELECT id FROM a), " +
+            "c AS (SELECT id FROM a) SELECT b.id+c.id AS id FROM b JOIN c ON b.id=c.id"
         val result = SqlColumnTrace.analyze(sql, sql.indexOf("id") + 1, null)
         val graph = result.graph
-        fun children(name: String) = graph.nodes.single { it.name == "컬럼 $name" }.children.map { graph.nodes[it].name }
+        fun children(position: Int) = graph.nodes.single { it.entry.offset == position }.children.map { graph.nodes[it].entry.offset }
+        val root = sql.indexOf("id")
+        val left = sql.indexOf("id FROM a")
+        val right = sql.lastIndexOf("id FROM a")
+        val joined = sql.indexOf("AS id") + 3
         assertEquals(listOf("컬럼 id"), graph.roots.map { graph.nodes[it].name })
-        assertEquals(listOf("컬럼 b_id", "컬럼 c_id"), children("id"))
-        assertEquals(listOf("컬럼 total"), children("b_id"))
-        assertEquals(listOf("컬럼 total"), children("c_id"))
-        assertTrue(children("total").isEmpty())
+        assertEquals(listOf(left, right), children(root))
+        assertEquals(listOf(joined), children(left))
+        assertEquals(listOf(joined), children(right))
+        assertTrue(children(joined).isEmpty())
     }
 
     fun testGraphDoesNotMergeDifferentStarSlotsAtTheSameOffset() {
@@ -205,11 +207,11 @@ class SqlColumnTraceTest : BasePlatformTestCase() {
         assertTrue(SqlColumnTrace.analyze(sql, sql.lastIndexOf("SELECT id") + 8, null).entries.isEmpty())
     }
 
-    fun testCaseInputsRemainLineageWhileWhereUsageIsExcluded() {
+    fun testCaseAliasDoesNotContinueIntoDifferentlyNamedInputs() {
         val sql = "WITH t AS (\n SELECT amount, flag FROM physical\n)\nSELECT CASE WHEN flag=1 THEN amount ELSE 0 END AS total\nFROM t\nWHERE flag=2"
         val result = SqlColumnTrace.analyze(sql, sql.indexOf("total") + 1, null)
         assertNull(result.message)
-        assertEquals(listOf(2, 2, 4), result.entries.map { it.line })
+        assertEquals(listOf(4), result.entries.map { it.line })
     }
 
     fun testSourceMiddleAndFinalColumnAllShowEntireChain() {
@@ -221,12 +223,11 @@ class SqlColumnTraceTest : BasePlatformTestCase() {
         }
     }
 
-    fun testForwardTraceFollowsRenamingAndAllBranches() {
+    fun testForwardTraceStopsAtDeclaredCteRenaming() {
         val sql = "WITH a(renamed) AS (\n SELECT original FROM physical\n), b AS (\n SELECT renamed AS next_name FROM a\n), c AS (\n SELECT renamed FROM a\n)\nSELECT b.next_name, c.renamed FROM b JOIN c ON b.next_name=c.renamed"
         val result = SqlColumnTrace.analyze(sql, sql.indexOf("original") + 1, null)
         assertNull(result.message)
-        assertTrue(result.entries.map { it.line }.containsAll(listOf(2, 4, 6, 8)))
-        assertEquals(2, result.entries.count { it.line == 8 })
+        assertEquals(listOf(2), result.entries.map { it.line })
     }
 
     fun testSharedStarDoesNotJoinDifferentOutputColumnsOrUnrelatedCtes() {
@@ -257,7 +258,7 @@ class SqlColumnTraceTest : BasePlatformTestCase() {
         val result = SqlColumnTrace.analyze(sql, sql.indexOf("original") + 1, null)
         assertNull(result.message)
         assertEquals(listOf(2, 4), result.entries.map { it.line })
-        assertEquals(listOf(2, 4), SqlColumnTrace.analyze(sql, sql.lastIndexOf("renamed") + 1, null).entries.map { it.line })
+        assertEquals(listOf(4), SqlColumnTrace.analyze(sql, sql.lastIndexOf("renamed") + 1, null).entries.map { it.line })
     }
 
     private fun trace(marked: String) = SqlColumnTrace.analyze(marked.replace("<caret>", ""), marked.indexOf("<caret>"), null)
@@ -270,32 +271,32 @@ class SqlColumnTraceTest : BasePlatformTestCase() {
         assertEquals(listOf("SS", "*", "SS"), result.entries.map { sql.replace("<caret>", "").substring(it.offset).takeWhile { c -> !c.isWhitespace() } })
     }
 
-    fun testDeclaredColumnsAndDerivedAliasesMapByPosition() {
+    fun testDeclaredCteRenamingStopsBeforeOriginalWhileSameNamesContinue() {
         val sql = "WITH t(renamed) AS (\n SELECT original FROM physical\n)\nSELECT q.renamed<caret> FROM (\n SELECT t.renamed FROM t\n) q"
-        assertEquals(listOf(2, 5, 4), trace(sql).entries.map { it.line })
+        assertEquals(listOf(5, 4), trace(sql).entries.map { it.line })
     }
 
     fun testQualifiedStarAndDeclaredDerivedColumns() {
         val sql = "WITH t AS (\n SELECT original FROM physical\n)\nSELECT renamed<caret> FROM (\n SELECT t.* FROM t\n) q(renamed)"
-        assertEquals(listOf(2, 5, 4), trace(sql).entries.map { it.line })
+        assertEquals(listOf(4), trace(sql).entries.map { it.line })
     }
 
-    fun testCaretOnRenamedProjectionFollowsItsExpression() {
+    fun testCaretOnRenamedProjectionStopsBeforeItsExpression() {
         val sql = "WITH t AS (\n SELECT original FROM physical\n)\nSELECT original AS renamed<caret> FROM t"
         val result = trace(sql)
         assertNull(result.message)
-        assertEquals(listOf(2, 4), result.entries.map { it.line })
+        assertEquals(listOf(4), result.entries.map { it.line })
     }
 
     fun testCursorAtColumnEndBeforeCommaAndInsideCrlfDocument() {
         assertEquals(listOf(2, 4), trace("WITH t AS (\r\n SELECT id FROM physical\r\n)\r\nSELECT id<caret>, 1 FROM t").entries.map { it.line })
     }
 
-    fun testExpressionTracesItsInputsBeforeOutputAlias() {
+    fun testExpressionAliasOnlyContinuesThroughMatchingOutputNames() {
         val sql = "WITH t AS (\n SELECT amount, fee FROM physical\n)\nSELECT total<caret> FROM (\n SELECT amount + fee AS total FROM t\n) q"
         val result = trace(sql)
         assertNull(result.message)
-        assertEquals(listOf(2, 2, 5, 4), result.entries.map { it.line })
+        assertEquals(listOf(5, 4), result.entries.map { it.line })
     }
 
     fun testAmbiguousColumnDoesNotInventSource() {
@@ -318,7 +319,8 @@ class SqlColumnTraceTest : BasePlatformTestCase() {
     }
 
     fun testUnionBranchesKeepCorrespondingOutputPosition() {
-        assertEquals(listOf(2, 4, 6), trace("WITH t AS (\n SELECT first_id AS id FROM a\n UNION ALL\n SELECT second_id FROM b\n)\nSELECT i<caret>d FROM t").entries.map { it.line })
+        assertEquals(listOf(2, 6), trace("WITH t AS (\n SELECT first_id AS id FROM a\n UNION ALL\n SELECT second_id FROM b\n)\nSELECT i<caret>d FROM t").entries.map { it.line })
+        assertEquals(listOf(2, 4, 6), trace("WITH t AS (\n SELECT id FROM a\n UNION ALL\n SELECT id FROM b\n)\nSELECT i<caret>d FROM t").entries.map { it.line })
     }
 
     fun testLengthLimitDoesNotReturnStalePath() {

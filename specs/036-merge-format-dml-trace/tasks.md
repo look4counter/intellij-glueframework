@@ -62,3 +62,34 @@ T016 → T017 → T018 → T019 순서로 실행한다. 명확화 후 분석에�
 - [x] T023 speckit-converge로 최신 요구·계획·작업과 구현을 대조하고 남은 작업을 완료한다.
 
 T020 → T021 → T022 → T023 순서로 수행한다. 명확화·계획·작업 분석에서 전체 경로와 값 선택 요구가 모두 대응하며 미해결 질문은 없다.
+
+## 10단계: 일관된 등호 정렬과 SET 첫 줄
+
+- [x] T024 [US3] src/test/kotlin/com/look4counter/SqlFormatterTest.kt에 조건절·대입문·INSERT SELECT·그룹 격리·멱등성 및 SET 첫 줄 회귀를 작성한다. FR-011~FR-014.
+- [x] T025 [US3] queryeditor/src/main/kotlin/com/look4counter/queryeditor/sql/SqlFormatter.kt에서 절별 등호 그룹과 SET 첫 표현식 들여쓰기를 적용한다. FR-011, FR-012.
+- [x] T026 [US3] queryeditor/src/main/kotlin/com/look4counter/queryeditor/settings/GlueQueryToolConfigurable.kt의 옵션 문구를 조건절·SET절로 갱신하고 저장 필드를 유지한다. FR-013.
+- [x] T027 포매터·편집기 회귀를 실행하고 specs/036-merge-format-dml-trace/quickstart.md에 결과를 기록한다. FR-014, SC-004.
+
+의존성: T024 → T025 → T026 → T027. 최소 제공 범위는 US3 전체다. T026은 T025와 다른 파일이므로 병렬 가능하지만 이번에는 순차 진행한다. 구현 후 수렴 점검으로 FR-011~FR-014와 SC-004를 대조한다.
+
+추가 문서 작업: T026과 함께 README.md의 옵션 설명을 조건절·SET절 범위로 갱신한다. FR-013.
+
+## 11단계: UPDATE 분기 키워드 끝 정렬
+
+사용자 이야기 4(P1)는 일반 UPDATE와 MERGE 내부 UPDATE 모두 WHERE·AND·OR 끝을 UPDATE 끝에 맞추는 것이다.
+
+- [x] T028 [US4] src/test/kotlin/com/look4counter/SqlFormatterTest.kt에 사용자 MERGE 및 일반 UPDATE의 정확한 키워드 열과 멱등성 회귀를 작성한다. FR-015, FR-016.
+- [x] T029 [US4] queryeditor/src/main/kotlin/com/look4counter/queryeditor/sql/SqlFormatter.kt의 MERGE UPDATE 분기 정렬 폭을 6으로 보정하고 WHEN에서 복귀한다. FR-015.
+- [x] T030 포매터·편집기 테스트를 실행하고 specs/036-merge-format-dml-trace/quickstart.md에 검증 결과를 기록한다. FR-016, SC-005.
+
+T028 → T029 → T030 순서로 수행한다. 단일 포매터를 공유하므로 순차 진행하며 최소 제공 범위는 이야기 4 전체다. 이전 단계 완료 내용은 유지한다.
+
+## 12단계: ON 조건 개수별 들여쓰기
+
+- [x] T031 [US5] src/test/kotlin/com/look4counter/SqlFormatterTest.kt에 단일·복수 ON 조건, OR·BETWEEN·CASE·서브쿼리 및 멱등성 회귀를 작성한다. FR-017, FR-018.
+- [x] T032 [US5] queryeditor/src/main/kotlin/com/look4counter/queryeditor/sql/SqlFormatter.kt에서 ON 최상위 논리 연결을 판별하고 첫 조건과 연결어 들여쓰기를 보정한다. FR-017.
+- [x] T033 specs/036-merge-format-dml-trace/quickstart.md에 ON 결과와 포매터·편집기 검증 및 수렴 결과를 기록한다. FR-018.
+
+T028 → T031 → T029 → T032 → T030 → T033 순서로 실행한다. 같은 포매터·테스트를 수정하므로 병렬 작업은 없다. 최소 제공 범위는 UPDATE와 ON 보정 모두다.
+
+T033의 사용자 문서 범위에 README.md의 ON 조건 개수별 들여쓰기 설명 갱신을 포함한다. FR-017, FR-018.

@@ -3,6 +3,7 @@ package com.look4counter.queryeditor.sql
 import com.intellij.openapi.progress.ProgressManager
 import java.util.IdentityHashMap
 import java.util.Locale
+import com.intellij.openapi.util.TextRange
 
 internal object SqlTableTrace {
     // Null means this caret belongs to the column analyzer, not a table selection.
@@ -22,10 +23,15 @@ internal object SqlTableTrace {
         var steps = 0
         var depth = 0
 
-        class Node(val offset: Int, val name: String) {
+        class Node(val offset: Int, val name: String, val table: List<SqlIdentifier>) {
             val inputs = linkedSetOf<Node>()
             val consumers = linkedSetOf<Node>()
-            fun add(input: Node) { inputs.add(input); input.consumers.add(this) }
+            fun add(input: Node) {
+                if (table.isNotEmpty() && table.size == input.table.size && table.zip(input.table).all { (left, right) -> left.matches(right) }) {
+                    inputs.add(input)
+                    input.consumers.add(this)
+                }
+            }
         }
 
         fun check() {
@@ -44,7 +50,7 @@ internal object SqlTableTrace {
 
         fun definition(cte: SqlCte): Node {
             definitions[cte]?.let { return it }
-            val node = Node(cte.nameToken.start, "CTE ${cte.name.spelling} (정의)")
+            val node = Node(cte.nameToken.start, "CTE ${cte.name.spelling} (정의)", listOf(cte.name))
             definitions[cte] = node
             return build(node, cte.query)
         }
@@ -58,7 +64,12 @@ internal object SqlTableTrace {
                 source.query != null -> "파생 테이블 ${source.reference}"
                 else -> "테이블 ${source.path.joinToString(".") { it.spelling }}$alias"
             }
-            val node = Node(source.nameTokens.lastOrNull()?.start ?: source.aliasToken?.start ?: source.start, name)
+            val table = when {
+                source.cte != null -> listOf(source.cte.name)
+                source.query != null -> listOfNotNull(source.alias)
+                else -> source.path
+            }
+            val node = Node(source.nameTokens.lastOrNull()?.start ?: source.aliasToken?.start ?: source.start, name, table)
             sources[source] = node
             if (source.cte != null) {
                 depth++
@@ -159,7 +170,22 @@ internal object SqlTableTrace {
             val entries = offsets.filter { it in text.indices }.map(::entry).distinctBy { it.line }
             val graph = SqlTraceGraphBuilder.build(related, { it.inputs },
                 { it.offset.takeIf { position -> position in text.indices }?.let(::entry) }, { it.name }, selectedNode)
-            return SqlTraceResult(entries, if (cycle) "순환 참조가 있어 일부 경로만 표시합니다." else null, graph = graph)
+            val occurrenceOffsets = mutableSetOf<Int>()
+            definitions.filterValues { it in related }.keys.forEach { occurrenceOffsets.add(it.nameToken.start) }
+            sources.filterValues { it in related }.keys.forEach { relation ->
+                relation.nameTokens.forEach { occurrenceOffsets.add(it.start) }
+                relation.aliasToken?.takeIf(::selectableAlias)?.let { occurrenceOffsets.add(it.start) }
+            }
+            parser.tokens.forEachIndexed { index, token ->
+                if (index % 128 == 0) ProgressManager.checkCanceled()
+                if (token.identifier != null && parser.tokens.getOrNull(index + 1)?.symbol(".") == true) {
+                    val relation = qualifier(index)
+                    if (relation != null && sources[relation] in related) occurrenceOffsets.add(token.start)
+                }
+            }
+            val occurrences = parser.tokens.filter { it.start in occurrenceOffsets }.map { TextRange(it.start, it.end) }
+            return SqlTraceResult(entries, if (cycle) "순환 참조가 있어 일부 경로만 표시합니다." else null,
+                graph = graph, occurrences = occurrences)
         }
     }
 }

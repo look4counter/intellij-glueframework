@@ -103,7 +103,7 @@ object SqlFormatter {
         }
 
         private fun range(start: Int, end: Int, base: Int, query: Boolean, vertical: Int? = null, pivot: Boolean = false,
-                          inheritedWhere: AlignmentGroup? = null) {
+                          inheritedWhere: AlignmentGroup? = null, conditionColumn: Int? = null) {
             var index = start
             var clause: String? = null
             var expressionColumn = base + 7
@@ -151,6 +151,10 @@ object SqlFormatter {
                         anchorWidth = if (firstWord == "MERGE") 5 else maxOf(6, firstWord.length)
                     }
                     if (firstWord == "INSERT") insertColumns = true
+                    if (statement == "MERGE") {
+                        if (firstWord == "UPDATE") anchorWidth = 6
+                        else if (firstWord == "WHEN") anchorWidth = 5
+                    }
                     spaceBefore(token)
                     when {
                         statement == "MERGE" && firstWord == "ON" -> writer.line(statementBase)
@@ -165,9 +169,9 @@ object SqlFormatter {
                         writer.raw(tokens[index + part].raw)
                     }
                     clause = words.substringBefore(' ')
-                    whereAlignment = if (clause == "WHERE" && options.alignWhereEquals) group() else null
+                    whereAlignment = if (clause in setOf("WHERE", "ON", "HAVING", "SET") && options.alignWhereEquals) group() else null
                     selectAlignment = if (clause == "SELECT" && options.alignSelectAs) group() else null
-                    expressionColumn = writer.column + 1
+                    expressionColumn = if (clause == "SET") statementBase + 7 else writer.column + 1
                     firstExpression = true
                     between = false
                     previous = tokens[index + count - 1]
@@ -175,6 +179,7 @@ object SqlFormatter {
                     index += count
                     continue
                 }
+                if (query && clause == "SET" && firstExpression) writer.line(expressionColumn)
                 if (token.symbol(",")) {
                     if (cases.isEmpty() && (vertical != null || query && clause in setOf("SELECT", "FROM", "GROUP", "ORDER", "SET", "VALUES"))) {
                         writer.line(vertical?.minus(2) ?: (expressionColumn - 2))
@@ -205,13 +210,14 @@ object SqlFormatter {
                     index++
                     continue
                 }
-                if (query && cases.isEmpty() && clause in setOf("WHERE", "ON", "HAVING")) {
+                if (cases.isEmpty() && (conditionColumn != null || query && clause in setOf("WHERE", "ON", "HAVING"))) {
                     if (token.keyword("BETWEEN")) between = true
                     if (token.keyword("AND") || token.keyword("OR")) {
                         if (token.keyword("AND") && between) between = false
                         else {
                             writer.space()
-                            writer.line(statementBase + anchorWidth - token.raw.length)
+                            writer.line(if (conditionColumn != null) conditionColumn + 3 - token.raw.length
+                                else statementBase + anchorWidth - token.raw.length)
                             writer.raw(token.printed)
                             previous = token
                             joinNext = false
@@ -224,9 +230,12 @@ object SqlFormatter {
                     val close = input.pairs[index]
                     val first = (index + 1 until close).firstOrNull { !tokens[it].comment }
                     val subquery = first != null && (tokens[first].keyword("SELECT") || tokens[first].keyword("WITH"))
+                    val onBlock = query && !subquery && clause == "ON" &&
+                        (index - 1 downTo start).firstOrNull { !tokens[it].comment }?.let { tokens[it].keyword("ON") } == true
+                    val onColumn = if (onBlock) statementBase + 4 else null
                     val pivotBlock = query && !subquery && clause in setOf("PIVOT", "UNPIVOT")
                     val pivotIn = pivot && previous?.keyword("IN") == true
-                    val list = query && !subquery && (clause == "VALUES" || insertColumns && clause in setOf("INSERT", "INTO") || statement == "MERGE" && clause == "ON")
+                    val list = query && !subquery && (onBlock || clause == "VALUES" || insertColumns && clause in setOf("INSERT", "INTO") || statement == "MERGE" && clause == "ON")
                     if (subquery && clause == "FROM" && previous?.keyword("FROM") != true && previous?.symbol(",") != true) {
                         writer.space()
                         writer.line(expressionColumn)
@@ -240,20 +249,21 @@ object SqlFormatter {
                     previous = token
                     val mergeUsing = subquery && statement == "MERGE" && clause == "USING"
                     val nestedBase = if (mergeUsing) statementBase + 4 else openingColumn + 4
-                    val listColumn = if (list) base + if (statement == "MERGE" && clause == "ON") 4 else 6 else null
+                    val listColumn = onColumn ?: if (list) base + if (statement == "MERGE" && clause == "ON") 4 else 6 else null
+                    val firstListColumn = if (onColumn != null && hasLogicalConditions(index + 1, close)) onColumn + 4 else listColumn
                     val pivotColumn = statementBase + (6 - (clause?.length ?: 0)).coerceAtLeast(0)
                     if (subquery) writer.line(nestedBase)
-                    if (list) writer.line(listColumn!!)
+                    if (list) writer.line(firstListColumn!!)
                     if (pivotBlock) writer.line(pivotColumn + 4)
                     if (pivotIn) writer.line(base + 6)
                     range(index + 1, close,
                         when { subquery -> nestedBase; pivotBlock -> pivotColumn + 4; else -> statementBase },
                         subquery,
-                        when { pivotBlock -> pivotColumn + 4; pivotIn -> base + 6; else -> listColumn }, pivotBlock,
-                        if (subquery || cases.isNotEmpty()) null else whereAlignment)
+                        when { pivotBlock -> pivotColumn + 4; pivotIn -> base + 6; else -> firstListColumn }, pivotBlock,
+                        if (subquery || cases.isNotEmpty()) null else whereAlignment, onColumn)
                     writer.before(tokens[close])
                     if (subquery) writer.line(if (mergeUsing) statementBase else openingColumn)
-                    if (list) writer.line(base)
+                    if (list) writer.line(if (onBlock) statementBase else base)
                     if (pivotBlock) writer.line(pivotColumn)
                     if (pivotIn) writer.line(base)
                     writer.raw(")")
@@ -302,6 +312,31 @@ object SqlFormatter {
                 index++
             }
             if (cases.isNotEmpty()) throw SqlFormatFailure("닫히지 않은 CASE 표현식을 확인하세요.")
+        }
+
+        private fun hasLogicalConditions(start: Int, end: Int): Boolean {
+            var index = start
+            var cases = 0
+            var between = false
+            while (index < end) {
+                if (index % 256 == 0) ProgressManager.checkCanceled()
+                val token = tokens[index]
+                if (token.symbol("(")) {
+                    index = input.pairs[index] + 1
+                    continue
+                }
+                if (!token.comment && tokens.getOrNull(index - 1)?.symbol(".") != true) {
+                    when {
+                        token.keyword("CASE") -> cases++
+                        token.keyword("END") && cases > 0 -> cases--
+                        cases == 0 && token.keyword("BETWEEN") -> between = true
+                        cases == 0 && token.keyword("AND") -> if (between) between = false else return true
+                        cases == 0 && token.keyword("OR") -> return true
+                    }
+                }
+                index++
+            }
+            return false
         }
 
         private fun spaceBefore(token: SqlFormattingToken) {

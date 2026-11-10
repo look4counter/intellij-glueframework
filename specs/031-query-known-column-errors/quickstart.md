@@ -25,3 +25,17 @@ $env:JAVA_HOME = Join-Path $PWD '.gradle-validation/caches/9.7.1/transforms/41d2
 ## 수렴 검토
 
 요구사항 8개·성공 기준 3개·사용자 이야기 3개와 계획의 구현 단계 5개를 파서 검증 전용 모드·확정 스키마·오류 범위·표시 수명·색상·회귀 결과에 대조했다. 누락·부분 구현·충돌·범위 밖 추가 항목은 각각 0개다. 기존 자동완성·TRACE는 기본 파서 모드를 유지하고 전체 회귀를 통과했다. 새 수렴 작업은 필요하지 않다. 헌장은 미작성 템플릿으로 규범 검사를 생략했고 확장 훅은 없다.
+
+## NULL 오탐 후속 검증 (2026-11-10)
+
+수정 전 새 NULL 리터럴 회귀가 실패하여 SELECT 직접 출력의 NULL 오탐을 재현했다. 수정 후 검사기 11개와 실제 편집기 54개를 포함한 전체 SQL 회귀 195개가 실패·오류·건너뜀 없이 통과했다. 직접 NULL·대소문자·명시/암시 별칭·함수·CASE·IS NULL·UPDATE SET·INSERT VALUES·파생 출력과 실제 누락 컬럼의 유지 및 인용/한정 NULL 식별자 검증을 확인했다. 실제 편집기에서는 NULL과 missing이 공존하는 SQL의 missing에만 정확한 ERROR 범위가 생기고 SQL·Source가 변경되지 않았다.
+
+로컬 Gradle 9.7.1, 프로젝트 .gradle-user-home 캐시, IDEA 2025.3.6.1의 JBR 21과 기존 오프라인 초기화 설정을 사용했다. 재실행 명령은 다음과 같다.
+
+```powershell
+$env:GRADLE_USER_HOME = "$PWD/.gradle-user-home"
+$sqlJbr = "$PWD/.gradle-user-home/caches/9.7.1/transforms/41d2ee0b381ac1ce59d15aa3eb4932b1/transformed/idea-2025.3.6.1-win/jbr"
+& .gradle-validation/gradle-9.7.1/bin/gradle.bat test --tests 'com.look4counter.Sql*Test' --tests com.look4counter.QuerySqlEditorTest --offline --no-configuration-cache -I .gradle-validation/press-position.init.gradle "-Porg.gradle.java.installations.paths=$sqlJbr"
+```
+
+메인·테스트 컴파일과 diff 공백 검사도 통과했다. 사용자 IDE 수동 조작이나 배포 ZIP 재생성은 수행하지 않았다.

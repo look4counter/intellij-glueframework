@@ -9,9 +9,23 @@ import com.intellij.openapi.editor.event.CaretEvent
 import com.intellij.openapi.editor.event.CaretListener
 import com.intellij.openapi.editor.event.DocumentEvent
 import com.intellij.openapi.editor.event.DocumentListener
+import com.intellij.openapi.actionSystem.AnActionEvent
+import com.intellij.openapi.actionSystem.ActionUpdateThread
+import com.intellij.openapi.actionSystem.CustomShortcutSet
+import com.intellij.openapi.actionSystem.MouseShortcut
+import com.intellij.openapi.actionSystem.IdeActions
+import com.intellij.openapi.keymap.KeymapUtil
+import com.intellij.openapi.project.DumbAwareAction
+import com.intellij.openapi.editor.colors.TextAttributesKey
+import com.intellij.openapi.editor.markup.TextAttributes
+import com.intellij.openapi.editor.markup.RangeHighlighter
+import com.intellij.openapi.editor.markup.HighlighterLayer
+import com.intellij.openapi.editor.markup.HighlighterTargetArea
+import com.intellij.ui.JBColor
 import com.intellij.openapi.editor.ex.EditorEx
 import com.intellij.openapi.editor.ex.util.EditorUtil
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.popup.JBPopupFactory
 import com.intellij.openapi.util.Disposer
 import com.intellij.ui.ColoredTreeCellRenderer
 import com.intellij.ui.SimpleTextAttributes
@@ -29,8 +43,11 @@ import java.awt.BorderLayout
 import java.awt.event.ActionEvent
 import java.awt.event.MouseAdapter
 import java.awt.event.MouseEvent
+import java.awt.event.InputEvent
 import javax.swing.AbstractAction
 import javax.swing.JComponent
+import javax.swing.DefaultListCellRenderer
+import javax.swing.JList
 import javax.swing.JTree
 import javax.swing.KeyStroke
 import javax.swing.tree.DefaultMutableTreeNode
@@ -80,6 +97,24 @@ internal class QueryColumnTracePanel(private val project: Project, private val f
     private var stamp = -1L
     private var viewState: ViewState? = null
     private var navigating = false
+    private var hover: QueryTraceHover? = null
+    private val occurrenceHighlights = mutableListOf<RangeHighlighter>()
+    private val occurrenceAttributes = TextAttributesKey.createTextAttributesKey("GLUE_SQL_TRACE_OCCURRENCE",
+        TextAttributes().apply { backgroundColor = JBColor(0xE8E8E8, 0x454545) })
+    private class History(val stamp: Long) {
+        val offsets = mutableListOf<Int>()
+        var index = -1
+        fun record(origin: Int, target: Int) {
+            if (origin == target) return
+            while (offsets.size > index + 1) offsets.removeAt(offsets.lastIndex)
+            if (offsets.lastOrNull() != origin) offsets.add(origin)
+            if (offsets.lastOrNull() != target) offsets.add(target)
+            while (offsets.size > 100) offsets.removeAt(0)
+            index = offsets.lastIndex
+        }
+    }
+    private val histories = java.util.IdentityHashMap<Document, History>()
+    private var navigationRevision = 0L
     @Volatile private var disposed = false
 
     init {
@@ -103,9 +138,11 @@ internal class QueryColumnTracePanel(private val project: Project, private val f
     }
 
     private fun attach(value: EditorEx) {
+        hover?.clear()
         editor = value
         val lifetime = Disposer.newDisposable("Glue SQL trace listeners")
         EditorUtil.disposeWithEditor(value, lifetime)
+        hover = QueryTraceHover(project, value, lifetime)
         value.caretModel.addCaretListener(object : CaretListener {
             override fun caretPositionChanged(event: CaretEvent) {
                 if (!navigating && editor === value) refresh()
@@ -113,13 +150,111 @@ internal class QueryColumnTracePanel(private val project: Project, private val f
         }, lifetime)
         value.document.addDocumentListener(object : DocumentListener {
             override fun documentChanged(event: DocumentEvent) {
+                hover?.clear()
+                histories.remove(event.document)
                 if (editor === value) refresh()
             }
         }, lifetime)
+        object : DumbAwareAction("SQL 출처 이동") {
+            override fun getActionUpdateThread() = ActionUpdateThread.EDT
+            override fun update(event: AnActionEvent) {
+                event.presentation.isEnabled = !disposed && !value.isDisposed && editor === value && field.document === value.document
+            }
+            override fun actionPerformed(action: AnActionEvent) {
+                val mouse = action.inputEvent as? MouseEvent ?: return
+                val point = javax.swing.SwingUtilities.convertPoint(mouse.component, mouse.point, value.contentComponent)
+                val logical = value.xyToLogicalPosition(point)
+                val offset = value.logicalPositionToOffset(logical)
+                if (value.offsetToLogicalPosition(offset) != logical || value.document.charsSequence.getOrNull(offset)?.isWhitespace() != false) return
+                navigateSource(value, offset)
+            }
+        }.registerCustomShortcutSet(CustomShortcutSet(MouseShortcut(MouseEvent.BUTTON1, InputEvent.CTRL_DOWN_MASK, 1)),
+            value.contentComponent, lifetime)
+        for ((direction, id, label) in listOf(Triple(-1, IdeActions.ACTION_GOTO_BACK, "추적 뒤로"),
+            Triple(1, IdeActions.ACTION_GOTO_FORWARD, "추적 앞으로"))) {
+            object : DumbAwareAction(label) {
+                override fun getActionUpdateThread() = ActionUpdateThread.EDT
+                override fun update(event: AnActionEvent) {
+                    val valid = !disposed && !project.isDisposed && !value.isDisposed && editor === value && value.document === field.document
+                    val history = if (valid) history(value) else null
+                    event.presentation.isEnabled = history != null && history.index >= 0 && history.index + direction in history.offsets.indices
+                }
+                override fun actionPerformed(event: AnActionEvent) {
+                    if (editor === value && !value.isDisposed && value.document === field.document) moveHistory(direction)
+                }
+            }.registerCustomShortcutSet(KeymapUtil.getActiveKeymapShortcuts(id), value.contentComponent, lifetime)
+        }
         Disposer.register(lifetime) {
             if (editor === value) { editor = null; invalidateTrace() }
         }
         refresh()
+    }
+
+    private fun history(current: EditorEx): History = histories[current.document]
+        ?.takeIf { it.stamp == current.document.modificationStamp }
+        ?: History(current.document.modificationStamp).also { histories[current.document] = it }
+
+    private fun moveHistory(direction: Int) {
+        val current = editor?.takeUnless { disposed || it.isDisposed || it.document !== field.document } ?: return
+        val history = history(current)
+        val next = history.index + direction
+        if (next !in history.offsets.indices) return
+        history.index = next
+        moveTo(current, history.offsets[next], record = false)
+    }
+
+    private fun moveTo(current: EditorEx, offset: Int, record: Boolean = true,
+                       origin: Int = current.caretModel.offset, refreshTrace: Boolean = true, focusEditor: Boolean = true) {
+        ++navigationRevision
+        hover?.clear()
+        if (record) history(current).record(origin, offset)
+        navigating = true
+        try {
+            current.selectionModel.removeSelection()
+            current.caretModel.moveToOffset(offset.coerceIn(0, current.document.textLength))
+            current.scrollingModel.scrollToCaret(ScrollType.MAKE_VISIBLE)
+            if (focusEditor) current.contentComponent.requestFocusInWindow()
+        } finally { navigating = false }
+        if (refreshTrace) refresh()
+    }
+
+    private fun navigateSource(current: EditorEx, offset: Int) {
+        if (disposed || project.isDisposed || current.isDisposed || editor !== current || field.document !== current.document) return
+        val revision = ++navigationRevision
+        val document = current.document
+        val documentStamp = document.modificationStamp
+        val caret = current.caretModel.offset
+        val text = document.text
+        val metadata = DatabaseMetadataService.getInstance(project).snapshot()
+        fun valid() = !disposed && !project.isDisposed && !current.isDisposed && editor === current &&
+            field.document === document && document.modificationStamp == documentStamp &&
+            navigationRevision == revision && current.caretModel.offset == caret
+        AppExecutorUtil.getAppExecutorService().execute {
+            if (disposed || project.isDisposed) return@execute
+            val candidates = SqlTrace.predecessors(text, offset, metadata)
+            ApplicationManager.getApplication().invokeLater({
+                if (!valid()) return@invokeLater
+                fun choose(node: SqlTraceNode) {
+                    if (valid()) moveTo(current, node.entry.offset, origin = offset)
+                }
+                when (candidates.size) {
+                    0 -> Unit
+                    1 -> choose(candidates.single())
+                    else -> JBPopupFactory.getInstance().createPopupChooserBuilder(candidates)
+                        .setTitle("이동할 출처 선택")
+                        .setRenderer(object : DefaultListCellRenderer() {
+                            override fun getListCellRendererComponent(list: JList<*>?, value: Any?, index: Int,
+                                                                       selected: Boolean, focus: Boolean): java.awt.Component {
+                                val node = value as SqlTraceNode
+                                return super.getListCellRendererComponent(list,
+                                    "${node.name}  ${node.entry.line}: ${node.entry.text}", index, selected, focus)
+                            }
+                        })
+                        .setItemChosenCallback { choose(it) }
+                        .createPopup().showInBestPositionFor(current)
+                }
+            }, ModalityState.nonModal())
+        }
     }
 
     private fun key(path: TreePath): List<String> = path.path.drop(1).mapNotNull {
@@ -127,6 +262,8 @@ internal class QueryColumnTracePanel(private val project: Project, private val f
     }
 
     private fun invalidateTrace() {
+        occurrenceHighlights.forEach { if (it.isValid) it.dispose() }
+        occurrenceHighlights.clear()
         if (!disposed && traceDocument === field.document && stamp == field.document.modificationStamp && root.childCount > 0) {
             val expanded = mutableSetOf<List<String>>()
             val paths = tree.getExpandedDescendants(TreePath(root.path))
@@ -209,25 +346,28 @@ internal class QueryColumnTracePanel(private val project: Project, private val f
         traceDocument = document
         displayedNodes = result.graph.nodes
         stamp = documentStamp
+        editor?.takeUnless { it.isDisposed || it.document !== document }?.let { current ->
+            result.occurrences.forEach { range ->
+                occurrenceHighlights.add(current.markupModel.addRangeHighlighter(occurrenceAttributes,
+                    range.startOffset, range.endOffset, HighlighterLayer.SELECTION - 1, HighlighterTargetArea.EXACT_RANGE))
+            }
+        }
     }
 
     private fun navigate(path: TreePath?, focusEditor: Boolean) {
         val current = editor?.takeUnless { it.isDisposed } ?: return
         if (disposed || project.isDisposed || field.document !== current.document || current.document.modificationStamp != stamp) return
         val entry = (path?.lastPathComponent as? Item)?.vertex?.entry ?: return
-        navigating = true
-        try {
-            tree.selectionPath = path
-            tree.scrollPathToVisible(path)
-            current.selectionModel.removeSelection()
-            current.caretModel.moveToOffset(entry.offset.coerceIn(0, current.document.textLength))
-            current.scrollingModel.scrollToCaret(ScrollType.MAKE_VISIBLE)
-            if (focusEditor) current.contentComponent.requestFocusInWindow()
-        } finally { navigating = false }
+        tree.selectionPath = path
+        tree.scrollPathToVisible(path)
+        moveTo(current, entry.offset, refreshTrace = false, focusEditor = focusEditor)
     }
 
     override fun dispose() {
         disposed = true
+        hover?.clear()
+        ++navigationRevision
+        histories.clear()
         invalidateTrace()
         editor = null
     }

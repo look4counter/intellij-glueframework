@@ -6,6 +6,25 @@ import com.look4counter.queryeditor.sql.SqlColumnValidator
 class SqlColumnValidatorTest : BasePlatformTestCase() {
     private fun errors(sql: String) = SqlColumnValidator.analyze(sql).map { sql.substring(it.start, it.end) }
 
+    fun testNullLiteralIsNotAColumnEvenInDirectSelectProjections() {
+        val prefix = "WITH t AS (SELECT id FROM physical) "
+        for (expression in listOf("NULL", "null", "NuLl", "NULL AS empty_value", "NULL empty_value",
+            "CAST(NULL AS VARCHAR(20)) AS empty_value", "COALESCE(id, NULL) AS result",
+            "CASE WHEN id IS NULL THEN NULL ELSE id END AS result")) {
+            assertEmpty(expression, errors(prefix + "SELECT $expression FROM t"))
+        }
+        assertEquals(listOf("missing"), errors(prefix + "SELECT NULL, NULL AS empty_value, missing FROM t WHERE id IS NULL"))
+        assertEmpty(errors(prefix + "UPDATE t SET id=NULL WHERE id IS NULL"))
+        assertEmpty(errors(prefix + "INSERT INTO t(id) VALUES (NULL)"))
+        assertEmpty(errors("SELECT NULL FROM (SELECT id FROM physical) t"))
+    }
+
+    fun testNullNamedIdentifiersRemainSubjectToColumnValidation() {
+        val prefix = "WITH t AS (SELECT id FROM physical) "
+        assertEquals(listOf("NULL", "\"NULL\""), errors(prefix + "SELECT t.NULL, \"NULL\" FROM t"))
+        assertEmpty(errors("WITH t AS (SELECT id AS \"NULL\" FROM physical) SELECT t.\"NULL\" FROM t"))
+    }
+
     fun testKnownOutputsAreCheckedAcrossAllQueryClauses() {
         val sql = "WITH t AS (SELECT id FROM physical) SELECT a.bad_select FROM t a JOIN t b ON a.bad_on=b.id WHERE a.bad_where=1 GROUP BY a.bad_group HAVING a.bad_having>0 ORDER BY a.bad_order"
         assertEquals(listOf("bad_select", "bad_on", "bad_where", "bad_group", "bad_having", "bad_order"), errors(sql))

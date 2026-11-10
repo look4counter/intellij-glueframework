@@ -24,6 +24,278 @@ import java.nio.file.Path
 import javax.swing.JList
 
 class QuerySqlEditorTest : BasePlatformTestCase() {
+    fun testNullLiteralHasNoErrorUnderlineWhileMissingColumnIsStillReported() {
+        val sql = "WITH t AS (SELECT id FROM physical) SELECT NULL, NULL AS empty_value, missing FROM t WHERE id IS NULL"
+        val field = openSql(sql)
+        val source = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
+        val before = source.text
+        com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("NULL literal diagnostics", {
+            columnErrors(field).size == 1
+        }, 10)
+        val error = columnErrors(field).single()
+        assertEquals(sql.indexOf("missing"), error.startOffset)
+        assertEquals("missing", field.text.substring(error.startOffset, error.endOffset))
+        assertEquals(sql, field.text)
+        assertEquals(before, source.text)
+    }
+
+    private class TraceHistoryAction(private val action: com.intellij.openapi.actionSystem.AnAction) {
+        private fun event() = com.intellij.openapi.actionSystem.AnActionEvent.createFromAnAction(
+            action, null, "test", com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT)
+        val isEnabled: Boolean get() = event().let { action.update(it); it.presentation.isEnabled }
+        fun perform() { if (isEnabled) action.actionPerformed(event()) }
+    }
+
+    private fun traceHistoryAction(name: String): TraceHistoryAction {
+        val field = descendants(design!!.component).filterIsInstance<EditorTextField>().single { it.name == "query.sql" }
+        val label = if (name == "query.trace.back") "추적 뒤로" else "추적 앞으로"
+        return TraceHistoryAction(com.intellij.openapi.actionSystem.ex.ActionUtil.getActions(field.editor!!.contentComponent)
+            .single { it.templatePresentation.text == label })
+    }
+
+    fun testTraceHistoryHasNoButtonsAndUsesExistingIdeNavigationShortcuts() {
+        val field = openSql("SELECT id FROM employee")
+        assertFalse(descendants(design!!.component).filterIsInstance<javax.swing.JButton>()
+            .any { it.name in setOf("query.trace.back", "query.trace.forward") })
+        val panel = descendants(design!!.component).filterIsInstance<javax.swing.JPanel>().single { it.name == "query.trace" }
+        assertNull((panel.layout as java.awt.BorderLayout).getLayoutComponent(java.awt.BorderLayout.NORTH))
+        val actions = com.intellij.openapi.actionSystem.ex.ActionUtil.getActions(field.editor!!.contentComponent)
+        for ((label, id) in listOf("추적 뒤로" to com.intellij.openapi.actionSystem.IdeActions.ACTION_GOTO_BACK,
+            "추적 앞으로" to com.intellij.openapi.actionSystem.IdeActions.ACTION_GOTO_FORWARD)) {
+            val action = actions.single { it.templatePresentation.text == label }
+            assertEquals(com.intellij.openapi.keymap.KeymapUtil.getActiveKeymapShortcuts(id).shortcuts.toList(), action.shortcutSet.shortcuts.toList())
+        }
+    }
+
+    fun testTableTraceHighlightsNamesAndBoundAliasesWithoutCrossingRenamedCte() {
+        val sql = "WITH t AS (SELECT e.id FROM employee e) SELECT a.id FROM t a WHERE a.id=1"
+        val field = openSql(sql, secondQuery = true)
+        val source = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
+        val before = source.text
+        val expected = setOf(sql.indexOf("t AS"), sql.indexOf("FROM t") + 5, sql.indexOf("t a WHERE") + 2,
+            sql.indexOf("a.id"), sql.lastIndexOf("a.id"))
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("a.id"))
+        com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("table trace background", {
+            traceHighlights(field).map { it.startOffset }.toSet() == expected
+        }, 10)
+        assertEquals(setOf(sql.indexOf("t AS"), sql.indexOf("FROM t") + 5), traceEntries().map { it.offset }.toSet())
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("employee"))
+        val physical = setOf(sql.indexOf("employee"), sql.indexOf("employee e") + 9, sql.indexOf("e.id"))
+        com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("physical table background", {
+            traceHighlights(field).map { it.startOffset }.toSet() == physical
+        }, 10)
+        assertEquals(listOf(sql.indexOf("employee")), traceEntries().map { it.offset })
+        descendants(design!!.component).filterIsInstance<JList<*>>().single { it.name == "query.list" }.selectedIndex = 0
+        UIUtil.dispatchAllInvocationEvents()
+        assertTrue(traceHighlights(field).isEmpty())
+        assertEquals(before, source.text)
+    }
+
+    private fun clickSql(field: EditorTextField, offset: Int, control: Boolean = true) {
+        val editor = field.editor!!
+        val point = editor.offsetToXY(offset)
+        editor.contentComponent.setSize(maxOf(editor.contentComponent.width, point.x + 100), maxOf(editor.contentComponent.height, point.y + 100))
+        val event = java.awt.event.MouseEvent(editor.contentComponent, java.awt.event.MouseEvent.MOUSE_PRESSED,
+            System.currentTimeMillis(), if (control) java.awt.event.InputEvent.CTRL_DOWN_MASK else 0,
+            point.x + 1, point.y + editor.lineHeight / 2, 1, false, java.awt.event.MouseEvent.BUTTON1)
+        val dispatcher = com.intellij.openapi.keymap.impl.IdeMouseEventDispatcher()
+        com.intellij.openapi.keymap.KeymapManager.getInstance()
+        com.intellij.openapi.actionSystem.ActionManager.getInstance()
+        for (id in listOf(java.awt.event.MouseEvent.MOUSE_PRESSED, java.awt.event.MouseEvent.MOUSE_RELEASED, java.awt.event.MouseEvent.MOUSE_CLICKED)) {
+            val mouse = java.awt.event.MouseEvent(event.component, id, event.`when`, event.modifiersEx, event.x, event.y, 1, false, event.button)
+            if (!dispatcher.dispatchMouseEvent(mouse) && !mouse.isConsumed) {
+                val listener = (editor as com.intellij.openapi.editor.impl.EditorImpl).mouseListener
+                when (id) {
+                    java.awt.event.MouseEvent.MOUSE_PRESSED -> listener.mousePressed(mouse)
+                    java.awt.event.MouseEvent.MOUSE_RELEASED -> listener.mouseReleased(mouse)
+                    else -> listener.mouseClicked(mouse)
+                }
+            }
+        }
+    }
+
+    private fun waitForCaret(field: EditorTextField, offset: Int) {
+        com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("trace navigation", {
+            field.editor!!.caretModel.offset == offset
+        }, 10)
+    }
+
+    private fun moveSqlMouse(field: EditorTextField, offset: Int, control: Boolean) {
+        val editor = field.editor!!
+        val point = editor.offsetToXY(offset)
+        val event = java.awt.event.MouseEvent(editor.contentComponent, java.awt.event.MouseEvent.MOUSE_MOVED,
+            System.currentTimeMillis(), if (control) java.awt.event.InputEvent.CTRL_DOWN_MASK else 0,
+            point.x + 1, point.y + editor.lineHeight / 2, 0, false)
+        editor.contentComponent.mouseMotionListeners.forEach { it.mouseMoved(event) }
+    }
+
+    private fun sourceUnderlines(field: EditorTextField) = field.editor!!.markupModel.allHighlighters.filter {
+        it.textAttributesKey == com.intellij.openapi.editor.colors.CodeInsightColors.HYPERLINK_ATTRIBUTES
+    }
+
+    private fun traceHighlights(field: EditorTextField) = field.editor!!.markupModel.allHighlighters.filter {
+        it.textAttributesKey?.externalName == "GLUE_SQL_TRACE_OCCURRENCE"
+    }
+
+    fun testControlHoverUnderlinesOnlyAvailableSourceAndClearsOnReleaseExitAndEdit() {
+        val sql = "WITH a AS (SELECT id FROM physical) SELECT id FROM a"
+        val field = openSql(sql)
+        val origin = sql.lastIndexOf("id")
+        moveSqlMouse(field, origin, true)
+        com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("source underline", { sourceUnderlines(field).size == 1 }, 10)
+        assertEquals(origin, sourceUnderlines(field).single().startOffset)
+        assertEquals(origin + 2, sourceUnderlines(field).single().endOffset)
+        val release = java.awt.event.KeyEvent(field.editor!!.contentComponent, java.awt.event.KeyEvent.KEY_RELEASED,
+            System.currentTimeMillis(), 0, java.awt.event.KeyEvent.VK_CONTROL, java.awt.event.KeyEvent.CHAR_UNDEFINED)
+        field.editor!!.contentComponent.keyListeners.forEach { it.keyReleased(release) }
+        assertTrue(sourceUnderlines(field).isEmpty())
+        moveSqlMouse(field, origin, false)
+        val press = java.awt.event.KeyEvent(field.editor!!.contentComponent, java.awt.event.KeyEvent.KEY_PRESSED,
+            System.currentTimeMillis(), java.awt.event.InputEvent.CTRL_DOWN_MASK, java.awt.event.KeyEvent.VK_CONTROL, java.awt.event.KeyEvent.CHAR_UNDEFINED)
+        field.editor!!.contentComponent.keyListeners.forEach { it.keyPressed(press) }
+        com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("stationary source underline", { sourceUnderlines(field).size == 1 }, 10)
+        val exit = java.awt.event.MouseEvent(field.editor!!.contentComponent, java.awt.event.MouseEvent.MOUSE_EXITED,
+            System.currentTimeMillis(), 0, 0, 0, 0, false)
+        field.editor!!.contentComponent.mouseListeners.forEach { it.mouseExited(exit) }
+        assertTrue(sourceUnderlines(field).isEmpty())
+        moveSqlMouse(field, origin, true)
+        com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("source underline before edit", { sourceUnderlines(field).size == 1 }, 10)
+        WriteCommandAction.runWriteCommandAction(project) { field.document.insertString(0, " ") }
+        assertTrue(sourceUnderlines(field).isEmpty())
+        moveSqlMouse(field, field.text.indexOf("physical"), true)
+        clickSql(field, field.text.indexOf("physical"))
+        UIUtil.dispatchAllInvocationEvents()
+        assertFalse(traceHistoryAction("query.trace.back").isEnabled)
+    }
+
+    fun testTracedColumnBackgroundIsReplacedByTableBackgroundAndClearsOnQueryChange() {
+        val sql = "WITH a AS (SELECT id FROM first_table), b AS (SELECT id FROM second_table) SELECT a.id FROM a JOIN b ON a.id=b.id WHERE a.id=1 AND b.id=2"
+        val field = openSql(sql, secondQuery = true)
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("a.id") + 2)
+        val expected = setOf(sql.indexOf("id FROM first_table"), sql.indexOf("a.id") + 2, sql.indexOf("ON a.id") + 5, sql.indexOf("WHERE a.id") + 8)
+        com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("trace gray background", {
+            traceHighlights(field).map { it.startOffset }.toSet() == expected
+        }, 10)
+        assertTrue(traceHighlights(field).all { it.textAttributes?.backgroundColor != null && field.text.substring(it.startOffset, it.endOffset) == "id" })
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("first_table"))
+        com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("table background replaces columns", {
+            traceHighlights(field).map { it.startOffset } == listOf(sql.indexOf("first_table"))
+        }, 10)
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("a.id") + 2)
+        com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("trace background restored", { traceHighlights(field).size == 4 }, 10)
+        descendants(design!!.component).filterIsInstance<JList<*>>().single { it.name == "query.list" }.selectedIndex = 0
+        UIUtil.dispatchAllInvocationEvents()
+        assertTrue(traceHighlights(field).isEmpty())
+    }
+
+    fun testControlClickUsesClickedColumnAndHistoryCanGoBackAndForward() {
+        val sql = "WITH a AS (SELECT id FROM physical), b AS (SELECT id FROM a) SELECT id FROM b"
+        val field = openSql(sql)
+        var sourceActions = 0
+        var nativeDeclarations = 0
+        val native = com.intellij.openapi.actionSystem.ActionManager.getInstance().getAction("GotoDeclaration")
+        com.intellij.openapi.application.ApplicationManager.getApplication().messageBus.connect(testRootDisposable)
+            .subscribe(com.intellij.openapi.actionSystem.ex.AnActionListener.TOPIC, object : com.intellij.openapi.actionSystem.ex.AnActionListener {
+                override fun beforeActionPerformed(action: com.intellij.openapi.actionSystem.AnAction, event: com.intellij.openapi.actionSystem.AnActionEvent) {
+                    if (action.templatePresentation.text == "SQL 출처 이동") sourceActions++
+                    if (action === native) nativeDeclarations++
+                }
+            })
+        val source = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
+        val before = source.text
+        val origin = sql.lastIndexOf("id")
+        val middle = sql.indexOf("id FROM a")
+        val first = sql.indexOf("id FROM physical")
+        assertFalse(traceHistoryAction("query.trace.back").isEnabled)
+        assertFalse(traceHistoryAction("query.trace.forward").isEnabled)
+        field.editor!!.caretModel.moveToOffset(0)
+        clickSql(field, origin)
+        waitForCaret(field, middle)
+        clickSql(field, middle)
+        waitForCaret(field, first)
+        traceHistoryAction("query.trace.back").perform()
+        assertEquals(middle, field.editor!!.caretModel.offset)
+        traceHistoryAction("query.trace.back").perform()
+        assertEquals(origin, field.editor!!.caretModel.offset)
+        traceHistoryAction("query.trace.forward").perform()
+        assertEquals(middle, field.editor!!.caretModel.offset)
+        clickSql(field, middle)
+        waitForCaret(field, first)
+        assertFalse(traceHistoryAction("query.trace.forward").isEnabled)
+        assertEquals(sql, field.text)
+        assertEquals(before, source.text)
+        assertEquals(3, sourceActions)
+        assertEquals(0, nativeDeclarations)
+        WriteCommandAction.runWriteCommandAction(project) { field.document.insertString(0, " ") }
+        assertFalse(traceHistoryAction("query.trace.back").isEnabled)
+        assertFalse(traceHistoryAction("query.trace.forward").isEnabled)
+    }
+
+    fun testControlClickTableQualifierAndQueryHistoryIsolation() {
+        val sql = "WITH t AS (SELECT id FROM physical) SELECT a.id FROM t a"
+        val field = openSql(sql, secondQuery = true)
+        val origin = sql.indexOf("a.id")
+        val declaration = sql.lastIndexOf("t a")
+        clickSql(field, origin)
+        waitForCaret(field, declaration)
+        clickSql(field, declaration)
+        waitForCaret(field, sql.indexOf("t AS"))
+        assertTrue(traceHistoryAction("query.trace.back").isEnabled)
+        descendants(design!!.component).filterIsInstance<JList<*>>().single { it.name == "query.list" }.selectedIndex = 0
+        UIUtil.dispatchAllInvocationEvents()
+        assertFalse(traceHistoryAction("query.trace.back").isEnabled)
+        assertFalse(traceHistoryAction("query.trace.forward").isEnabled)
+        descendants(design!!.component).filterIsInstance<JList<*>>().single { it.name == "query.list" }.selectedIndex = 1
+        UIUtil.dispatchAllInvocationEvents()
+        assertTrue(traceHistoryAction("query.trace.back").isEnabled)
+        traceHistoryAction("query.trace.back").perform()
+        assertEquals(declaration, field.editor!!.caretModel.offset)
+    }
+
+    fun testOrdinarySqlClickDoesNotNavigateAndTreeNavigationIsRecorded() {
+        val sql = "WITH t AS (\n SELECT id FROM physical\n)\nSELECT id FROM t"
+        val field = openSql(sql)
+        val origin = sql.lastIndexOf("id")
+        clickSql(field, origin, false)
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(origin, field.editor!!.caretModel.offset)
+        assertFalse(traceHistoryAction("query.trace.back").isEnabled)
+        waitForTrace(listOf(2, 4))
+        val tree = traceTree()
+        tree.selectionPath = pathAt(sql.indexOf("id"))
+        tree.actionMap.get("trace.navigate").actionPerformed(null)
+        assertEquals(sql.indexOf("id"), field.editor!!.caretModel.offset)
+        traceHistoryAction("query.trace.back").perform()
+        assertEquals(origin, field.editor!!.caretModel.offset)
+        traceHistoryAction("query.trace.forward").perform()
+        assertEquals(sql.indexOf("id"), field.editor!!.caretModel.offset)
+    }
+
+    fun testControlClickWithMultipleInputsLetsUserChooseSource() {
+        val sql = "WITH a AS (SELECT x FROM first_table), b AS (SELECT x FROM second_table) SELECT a.x+b.x AS x FROM a JOIN b ON 1=1"
+        val field = openSql(sql)
+        var captured: com.intellij.openapi.ui.popup.JBPopup? = null
+        com.intellij.ui.UiInterceptors.registerPossible(testRootDisposable,
+            object : com.intellij.ui.UiInterceptors.UiInterceptor<com.intellij.openapi.ui.popup.JBPopup>(com.intellij.openapi.ui.popup.JBPopup::class.java) {
+                override fun doIntercept(popup: com.intellij.openapi.ui.popup.JBPopup) { captured = popup }
+            })
+        clickSql(field, sql.indexOf("x FROM a JOIN"))
+        com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("source chooser", {
+            captured != null
+        }, 10)
+        val popup = captured!!
+        try {
+            val list = descendants(popup.content).filterIsInstance<JList<*>>().single()
+            assertEquals(2, list.model.size)
+            list.selectedIndex = 1
+            popup.closeOk(null)
+            waitForCaret(field, sql.indexOf("x FROM second_table"))
+            traceHistoryAction("query.trace.back").perform()
+            assertEquals(sql.indexOf("x FROM a JOIN"), field.editor!!.caretModel.offset)
+            assertEquals(sql, field.text)
+        } finally { if (!popup.isDisposed) popup.cancel() }
+    }
+
     private fun columnErrors(field: EditorTextField) = field.editor!!.markupModel.allHighlighters.filter {
         it.textAttributesKey == com.intellij.openapi.editor.colors.CodeInsightColors.ERRORS_ATTRIBUTES
     }
@@ -195,7 +467,7 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
         assertEquals(sql, field.text)
         assertEquals(sourceBefore, source.text)
         field.editor!!.caretModel.moveToOffset(sql.indexOf("DUAL"))
-        waitForTrace(listOf(3, 1, 7, 5, 10))
+        waitForTrace(listOf(3))
     }
 
     fun testTableTraceNavigatesSwitchesToColumnsAndClearsAfterQuerySwitch() {
@@ -204,27 +476,27 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
         val source = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
         val sourceBefore = source.text
         field.editor!!.caretModel.moveToOffset(sql.indexOf("a.id") + 1)
-        waitForTrace(listOf(2, 1, 5))
+        waitForTrace(listOf(1, 5))
         val list = traceTree()
-        assertEquals(2, list.leadSelectionRow)
+        assertEquals(1, list.leadSelectionRow)
         list.setSize(300, 160)
         val bounds = list.getRowBounds(0)
         val click = java.awt.event.MouseEvent(list, java.awt.event.MouseEvent.MOUSE_PRESSED,
             System.currentTimeMillis(), 0, bounds.x + 4, bounds.y + 4, 1, false, java.awt.event.MouseEvent.BUTTON1)
         list.mouseListeners.forEach { it.mousePressed(click) }
-        assertEquals(sql.indexOf("physical"), field.editor!!.caretModel.offset)
+        assertEquals(sql.indexOf("t AS"), field.editor!!.caretModel.offset)
         assertEquals(0, list.leadSelectionRow)
-        assertEquals(3, list.rowCount)
+        assertEquals(2, list.rowCount)
         list.setSelectionRow(1)
         list.actionMap.get("trace.navigate").actionPerformed(null)
-        assertEquals(sql.indexOf("t AS"), field.editor!!.caretModel.offset)
+        assertEquals(sql.lastIndexOf("t a"), field.editor!!.caretModel.offset)
         assertEquals(1, list.leadSelectionRow)
         field.editor!!.caretModel.moveToOffset(sql.indexOf("a.id") + 3)
         waitForTrace(listOf(2, 4))
         assertEquals(1, list.leadSelectionRow)
         field.editor!!.caretModel.moveToOffset(sql.lastIndexOf('a') + 1)
-        waitForTrace(listOf(2, 1, 5))
-        assertEquals(2, list.leadSelectionRow)
+        waitForTrace(listOf(1, 5))
+        assertEquals(1, list.leadSelectionRow)
         assertEquals(sql, field.text)
         assertEquals(sourceBefore, source.text)
         WriteCommandAction.runWriteCommandAction(project) { field.document.setText("SELECT * FROM replacement") }
@@ -295,8 +567,8 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
     fun testStandardTraceTreePreservesCollapsedBranchesAndUsesNativeControls() {
         val sql = "WITH a AS (\n SELECT * FROM origin\n), b AS (\n SELECT * FROM a\n), c AS (\n SELECT * FROM a\n)\nSELECT *\nFROM b JOIN c ON 1=1"
         val field = openSql(sql)
-        field.editor!!.caretModel.moveToOffset(sql.indexOf("origin") + 1)
-        val lines = listOf(2, 1, 4, 3, 9, 6, 5, 9)
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("a AS"))
+        val lines = listOf(1, 4, 6)
         waitForTrace(lines)
         val tree = traceTree()
         assertFalse(tree.isRootVisible)
@@ -304,9 +576,9 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
         tree.setSize(500, 400)
         val source = FileDocumentManager.getInstance().getDocument(design!!.file!!)!!
         val before = source.text
-        val branchOffset = sql.indexOf("FROM a") + 5
+        val branchOffset = sql.indexOf("a AS")
         tree.collapsePath(pathAt(branchOffset))
-        field.editor!!.caretModel.moveToOffset(sql.indexOf("origin") + 2)
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("a AS") + 1)
         waitForTrace(lines)
         val branch = pathAt(branchOffset)
         assertFalse(tree.isExpanded(branch))
@@ -325,22 +597,23 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
         assertTrue(tree.isExpanded(branch))
         assertEquals(caret, field.editor!!.caretModel.offset)
         tree.collapsePath(branch)
-        field.editor!!.caretModel.moveToOffset(sql.indexOf("b AS") + 1)
+        field.editor!!.caretModel.moveToOffset(sql.indexOf("FROM a") + 6)
         waitForTrace(lines)
         assertTrue(tree.isExpanded(pathAt(branchOffset)))
-        assertEquals(sql.indexOf("b AS"), vertex(tree.selectionPath!!.lastPathComponent)!!.entry.offset)
+        assertEquals(sql.indexOf("FROM a") + 5, vertex(tree.selectionPath!!.lastPathComponent)!!.entry.offset)
         assertEquals(sql, field.text)
         assertEquals(before, source.text)
     }
 
     fun testTraceTreeShowsSharedConsumerOnEachPathAndKeepsSelectedOccurrence() {
-        val sql = "WITH t AS (\n SELECT a, b FROM physical\n)\nSELECT a+b AS total FROM t"
+        val sql = "WITH a AS (\n SELECT id FROM first_table\n), b AS (\n SELECT id FROM second_table\n)\nSELECT a.id+b.id AS id FROM a JOIN b ON 1=1"
         val field = openSql(sql)
-        field.editor!!.caretModel.moveToOffset(sql.indexOf("total") + 1)
-        waitForTrace(listOf(2, 4, 2, 4))
-        val totals = traceNodes().filter { vertex(it)?.name == "컬럼 total" }
+        val joined = sql.indexOf("AS id") + 3
+        field.editor!!.caretModel.moveToOffset(joined + 1)
+        waitForTrace(listOf(2, 6, 4, 6))
+        val totals = traceNodes().filter { vertex(it)?.entry?.offset == joined }
         assertEquals(2, totals.size)
-        assertEquals(setOf("컬럼 a", "컬럼 b"), totals.map { vertex(it.parent)!!.name }.toSet())
+        assertEquals(setOf(sql.indexOf("id FROM first_table"), sql.indexOf("id FROM second_table")), totals.map { vertex(it.parent)!!.entry.offset }.toSet())
         val tree = traceTree()
         tree.setSize(500, 240)
         val secondPath = javax.swing.tree.TreePath(totals.last().path)
@@ -349,10 +622,10 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
             0, bounds.x + 4, bounds.y + 4, 1, false, java.awt.event.MouseEvent.BUTTON1)
         tree.mouseListeners.forEach { it.mousePressed(press) }
         assertEquals(secondPath, tree.selectionPath)
-        assertEquals(sql.indexOf("total"), field.editor!!.caretModel.offset)
-        field.editor!!.caretModel.moveToOffset(sql.indexOf("total") + 2)
-        waitForTrace(listOf(2, 4, 2, 4))
-        assertEquals("컬럼 b", vertex((tree.selectionPath!!.lastPathComponent as javax.swing.tree.DefaultMutableTreeNode).parent)!!.name)
+        assertEquals(joined, field.editor!!.caretModel.offset)
+        field.editor!!.caretModel.moveToOffset(joined + 2)
+        waitForTrace(listOf(2, 6, 4, 6))
+        assertEquals(sql.indexOf("id FROM second_table"), vertex((tree.selectionPath!!.lastPathComponent as javax.swing.tree.DefaultMutableTreeNode).parent)!!.entry.offset)
         assertEquals(sql, field.text)
     }
 
@@ -360,18 +633,18 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
         val sql = "WITH a AS (SELECT id FROM pa), b AS (SELECT id FROM pb) SELECT a.id FROM a JOIN b ON a.id=b.id"
         val field = openSql(sql)
         field.editor!!.caretModel.moveToOffset(sql.indexOf("pa") + 1)
-        waitForTrace(listOf(1, 1, 1))
+        waitForTrace(listOf(1))
         val tree = traceTree()
         tree.collapsePath(pathAt(sql.indexOf("pa")))
         assertEquals(1, tree.rowCount)
         field.editor!!.caretModel.moveToOffset(sql.indexOf("pb") + 1)
-        waitForTrace(listOf(1, 1, 1))
-        assertEquals(3, tree.rowCount)
+        waitForTrace(listOf(1))
+        assertEquals(1, tree.rowCount)
         assertEquals("테이블 pb", vertex(tree.getPathForRow(0).lastPathComponent)!!.name)
         assertEquals(sql, field.text)
     }
 
-    fun testTraceTreeStopsRecursiveBranchesAndBoundsRepeatedDiamondPaths() {
+    fun testTraceTreeStopsRecursiveBranchesAndBoundsManySameNameReferences() {
         val sql = "WITH RECURSIVE t(id) AS (SELECT id FROM t) SELECT id FROM t"
         val field = openSql(sql)
         field.editor!!.caretModel.moveToOffset(sql.indexOf("t(id)") + 1)
@@ -379,13 +652,11 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
             traceNodes().any { it.toString().contains("순환 참조") }
         }, 10)
         assertTrue(traceNodes().size < 12)
-        val branches = (1..11).joinToString(",\n") { index ->
-            "c$index AS (SELECT * FROM c${index - 1} UNION ALL SELECT * FROM c${index - 1})"
-        }
-        val wide = "WITH c0 AS (SELECT * FROM origin),\n$branches\nSELECT * FROM c11"
+        val branches = (1..1050).joinToString(" UNION ALL ") { "SELECT id FROM t" }
+        val wide = "WITH RECURSIVE t(id) AS ($branches) SELECT id FROM t"
         WriteCommandAction.runWriteCommandAction(project) { field.document.setText(wide) }
         UIUtil.dispatchAllInvocationEvents()
-        field.editor!!.caretModel.moveToOffset(wide.indexOf("origin") + 1)
+        field.editor!!.caretModel.moveToOffset(wide.indexOf("t(id)") + 1)
         com.intellij.testFramework.PlatformTestUtil.waitWithEventsDispatching("bounded trace tree", {
             traceNodes().any { it.toString().contains("표시 한도") }
         }, 10)

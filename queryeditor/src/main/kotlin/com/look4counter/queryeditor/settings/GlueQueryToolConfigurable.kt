@@ -30,7 +30,7 @@ class GlueQueryToolConfigurable(private val project: Project) : SearchableConfig
                 add(TitledSeparator("SQL 포매팅 스타일"), BorderLayout.NORTH)
                 add(JBPanel<JBPanel<*>>(GridLayout(0, 1, 0, JBUI.scale(4))).apply {
                     border = JBUI.Borders.emptyLeft(20)
-                    add(JBCheckBox("WHERE절 등호에 맞춰 정렬").apply {
+                    add(JBCheckBox("조건절·SET절 등호에 맞춰 정렬").apply {
                         name = "format.alignWhereEquals"
                         isSelected = formattingSettings.state.alignWhereEquals
                         alignWhereEquals = this
