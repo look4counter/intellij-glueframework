@@ -13,8 +13,6 @@ import com.intellij.openapi.actionSystem.AnActionEvent
 import com.intellij.openapi.actionSystem.ActionUpdateThread
 import com.intellij.openapi.actionSystem.CustomShortcutSet
 import com.intellij.openapi.actionSystem.MouseShortcut
-import com.intellij.openapi.actionSystem.IdeActions
-import com.intellij.openapi.keymap.KeymapUtil
 import com.intellij.openapi.project.DumbAwareAction
 import com.intellij.openapi.editor.colors.TextAttributesKey
 import com.intellij.openapi.editor.markup.TextAttributes
@@ -101,19 +99,6 @@ internal class QueryColumnTracePanel(private val project: Project, private val f
     private val occurrenceHighlights = mutableListOf<RangeHighlighter>()
     private val occurrenceAttributes = TextAttributesKey.createTextAttributesKey("GLUE_SQL_TRACE_OCCURRENCE",
         TextAttributes().apply { backgroundColor = JBColor(0xE8E8E8, 0x454545) })
-    private class History(val stamp: Long) {
-        val offsets = mutableListOf<Int>()
-        var index = -1
-        fun record(origin: Int, target: Int) {
-            if (origin == target) return
-            while (offsets.size > index + 1) offsets.removeAt(offsets.lastIndex)
-            if (offsets.lastOrNull() != origin) offsets.add(origin)
-            if (offsets.lastOrNull() != target) offsets.add(target)
-            while (offsets.size > 100) offsets.removeAt(0)
-            index = offsets.lastIndex
-        }
-    }
-    private val histories = java.util.IdentityHashMap<Document, History>()
     private var navigationRevision = 0L
     @Volatile private var disposed = false
 
@@ -151,7 +136,6 @@ internal class QueryColumnTracePanel(private val project: Project, private val f
         value.document.addDocumentListener(object : DocumentListener {
             override fun documentChanged(event: DocumentEvent) {
                 hover?.clear()
-                histories.remove(event.document)
                 if (editor === value) refresh()
             }
         }, lifetime)
@@ -170,44 +154,15 @@ internal class QueryColumnTracePanel(private val project: Project, private val f
             }
         }.registerCustomShortcutSet(CustomShortcutSet(MouseShortcut(MouseEvent.BUTTON1, InputEvent.CTRL_DOWN_MASK, 1)),
             value.contentComponent, lifetime)
-        for ((direction, id, label) in listOf(Triple(-1, IdeActions.ACTION_GOTO_BACK, "추적 뒤로"),
-            Triple(1, IdeActions.ACTION_GOTO_FORWARD, "추적 앞으로"))) {
-            object : DumbAwareAction(label) {
-                override fun getActionUpdateThread() = ActionUpdateThread.EDT
-                override fun update(event: AnActionEvent) {
-                    val valid = !disposed && !project.isDisposed && !value.isDisposed && editor === value && value.document === field.document
-                    val history = if (valid) history(value) else null
-                    event.presentation.isEnabled = history != null && history.index >= 0 && history.index + direction in history.offsets.indices
-                }
-                override fun actionPerformed(event: AnActionEvent) {
-                    if (editor === value && !value.isDisposed && value.document === field.document) moveHistory(direction)
-                }
-            }.registerCustomShortcutSet(KeymapUtil.getActiveKeymapShortcuts(id), value.contentComponent, lifetime)
-        }
         Disposer.register(lifetime) {
             if (editor === value) { editor = null; invalidateTrace() }
         }
         refresh()
     }
 
-    private fun history(current: EditorEx): History = histories[current.document]
-        ?.takeIf { it.stamp == current.document.modificationStamp }
-        ?: History(current.document.modificationStamp).also { histories[current.document] = it }
-
-    private fun moveHistory(direction: Int) {
-        val current = editor?.takeUnless { disposed || it.isDisposed || it.document !== field.document } ?: return
-        val history = history(current)
-        val next = history.index + direction
-        if (next !in history.offsets.indices) return
-        history.index = next
-        moveTo(current, history.offsets[next], record = false)
-    }
-
-    private fun moveTo(current: EditorEx, offset: Int, record: Boolean = true,
-                       origin: Int = current.caretModel.offset, refreshTrace: Boolean = true, focusEditor: Boolean = true) {
+    private fun moveTo(current: EditorEx, offset: Int, refreshTrace: Boolean = true, focusEditor: Boolean = true) {
         ++navigationRevision
         hover?.clear()
-        if (record) history(current).record(origin, offset)
         navigating = true
         try {
             current.selectionModel.removeSelection()
@@ -235,7 +190,7 @@ internal class QueryColumnTracePanel(private val project: Project, private val f
             ApplicationManager.getApplication().invokeLater({
                 if (!valid()) return@invokeLater
                 fun choose(node: SqlTraceNode) {
-                    if (valid()) moveTo(current, node.entry.offset, origin = offset)
+                    if (valid()) moveTo(current, node.entry.offset)
                 }
                 when (candidates.size) {
                     0 -> Unit
@@ -367,7 +322,6 @@ internal class QueryColumnTracePanel(private val project: Project, private val f
         disposed = true
         hover?.clear()
         ++navigationRevision
-        histories.clear()
         invalidateTrace()
         editor = null
     }

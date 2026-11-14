@@ -1,4 +1,4 @@
-# 작업 목록: 추적 출처 이동과 탐색 기록
+﻿# 작업 목록: 추적 출처 이동과 탐색 기록
 
 ## 1단계: 기반
 
@@ -50,3 +50,11 @@ T009 → T012 → T013 → T010 → T011 → T014 → T015 순서로 진행한�
 - [x] T021 README.md·specs/037-trace-source-navigation/contracts/navigation.md·quickstart.md에 테이블 규칙·버튼 제거·단축키와 전체 SQL 회귀 결과를 기록한다. FR-018, SC-005.
 
 T016 → T017 → T020 → T018 → T019 → T021 순서로 진행한다. 같은 분석·UI 파일을 변경하므로 순차 작업한다. 최소 제공 범위는 사용자 이야기 5·6 전체다. 구현 후 최신 명세·계획·작업과 코드를 수렴 점검한다.
+
+## 9단계: IDE 탐색 단축키 점유 해제
+
+- [x] T022 [US7] src/test/kotlin/com/look4counter/QuerySqlEditorTest.kt의 이력 회귀를 로컬 액션·IDE 탐색 단축키 점유 부재 및 기존 출처·트리 이동 회귀로 갱신한다. FR-021, FR-022, SC-006.
+- [x] T023 [US7] queryeditor/src/main/kotlin/com/look4counter/queryeditor/QueryColumnTracePanel.kt의 뒤로·앞으로 로컬 액션·키맵 참조·전용 이력을 제거한다. FR-021, FR-022.
+- [x] T024 README.md와 specs/037-trace-source-navigation/quickstart.md에 최신 동작 및 실제 편집기 검증 결과를 기록한다. FR-021, SC-006.
+
+의존성: 명세·명확화·계획 → T022 → T023 → T024 → 수렴 점검. 독립 검증은 SQL 입력창에서 IDE 단축키 점유가 없고 Ctrl·트리 출처 이동이 유지되는 것이다. 최소 제공 범위는 사용자 이야기 7 전체다. T022·T023은 검증 대상이 연결되므로 순차 진행하며 별도 병렬 작업은 없다.

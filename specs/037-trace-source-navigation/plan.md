@@ -49,3 +49,8 @@ SqlTableTraceTest.kt·SqlTraceNavigationTest.kt와 실제 QuerySqlEditorTest.kt�
 ## 탐색 버튼 제거 설계
 
 QueryColumnTracePanel.kt의 NORTH 버튼 패널과 JButton 필드·상태 갱신을 제거한다. SQL 에디터 수명에 묶인 로컬 DumbAwareAction 두 개를 등록하여 IDE ACTION_GOTO_BACK·ACTION_GOTO_FORWARD의 활성 키맵 단축키를 사용한다. 액션 update에서 기록 인덱스로 사용 가능 여부를 계산하고 actionPerformed에서 기존 moveHistory를 실행한다. 기존 이동 기록 자료형과 이동 과정은 유지한다. QuerySqlEditorTest.kt의 버튼 조작을 실제 등록 액션 조작으로 바꾸고 화면에서 두 버튼이 없는지 검증한다.
+
+
+## 2026-11-14 계획: IDE 탐색 단축키 점유 해제
+
+현재 기준은 FR-021~FR-022이며 위의 전용 이력 설계를 대체한다. QueryColumnTracePanel.kt의 뒤로·앞으로 로컬 액션·키맵 참조와 사용처가 사라진 History를 제거한다. Ctrl+클릭 마우스 액션·비동기 검증·트리 이동·강조는 유지한다. QuerySqlEditorTest.kt의 이력 조작 검증을 액션·단축키 점유 부재와 기존 출처·트리 이동 검증으로 바꾼다. README.md와 탐색 계약을 갱신하고 기존 오프라인 Gradle로 QuerySqlEditorTest를 실행한다. Kotlin·IntelliJ·Swing 및 기존 테스트 환경을 재사용한다. 새 의존성·데이터는 없고 헌장은 미작성 템플릿이며 한글 문서·speckit 절차를 준수한다.

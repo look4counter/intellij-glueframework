@@ -39,32 +39,23 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
         assertEquals(before, source.text)
     }
 
-    private class TraceHistoryAction(private val action: com.intellij.openapi.actionSystem.AnAction) {
-        private fun event() = com.intellij.openapi.actionSystem.AnActionEvent.createFromAnAction(
-            action, null, "test", com.intellij.openapi.actionSystem.DataContext.EMPTY_CONTEXT)
-        val isEnabled: Boolean get() = event().let { action.update(it); it.presentation.isEnabled }
-        fun perform() { if (isEnabled) action.actionPerformed(event()) }
+    private fun assertNoTraceNavigationActions(field: EditorTextField) {
+        val actions = com.intellij.openapi.actionSystem.ex.ActionUtil.getActions(field.editor!!.contentComponent)
+        assertFalse(actions.any { it.templatePresentation.text in setOf("추적 뒤로", "추적 앞으로") })
+        val navigationShortcuts = listOf(com.intellij.openapi.actionSystem.IdeActions.ACTION_GOTO_BACK,
+            com.intellij.openapi.actionSystem.IdeActions.ACTION_GOTO_FORWARD).flatMap {
+            com.intellij.openapi.keymap.KeymapUtil.getActiveKeymapShortcuts(it).shortcuts.toList()
+        }.toSet()
+        assertFalse(actions.any { action -> action.shortcutSet.shortcuts.any { it in navigationShortcuts } })
     }
 
-    private fun traceHistoryAction(name: String): TraceHistoryAction {
-        val field = descendants(design!!.component).filterIsInstance<EditorTextField>().single { it.name == "query.sql" }
-        val label = if (name == "query.trace.back") "추적 뒤로" else "추적 앞으로"
-        return TraceHistoryAction(com.intellij.openapi.actionSystem.ex.ActionUtil.getActions(field.editor!!.contentComponent)
-            .single { it.templatePresentation.text == label })
-    }
-
-    fun testTraceHistoryHasNoButtonsAndUsesExistingIdeNavigationShortcuts() {
+    fun testTraceDoesNotRegisterIdeNavigationShortcutsOrButtons() {
         val field = openSql("SELECT id FROM employee")
         assertFalse(descendants(design!!.component).filterIsInstance<javax.swing.JButton>()
             .any { it.name in setOf("query.trace.back", "query.trace.forward") })
         val panel = descendants(design!!.component).filterIsInstance<javax.swing.JPanel>().single { it.name == "query.trace" }
         assertNull((panel.layout as java.awt.BorderLayout).getLayoutComponent(java.awt.BorderLayout.NORTH))
-        val actions = com.intellij.openapi.actionSystem.ex.ActionUtil.getActions(field.editor!!.contentComponent)
-        for ((label, id) in listOf("추적 뒤로" to com.intellij.openapi.actionSystem.IdeActions.ACTION_GOTO_BACK,
-            "추적 앞으로" to com.intellij.openapi.actionSystem.IdeActions.ACTION_GOTO_FORWARD)) {
-            val action = actions.single { it.templatePresentation.text == label }
-            assertEquals(com.intellij.openapi.keymap.KeymapUtil.getActiveKeymapShortcuts(id).shortcuts.toList(), action.shortcutSet.shortcuts.toList())
-        }
+        assertNoTraceNavigationActions(field)
     }
 
     fun testTableTraceHighlightsNamesAndBoundAliasesWithoutCrossingRenamedCte() {
@@ -165,7 +156,7 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
         moveSqlMouse(field, field.text.indexOf("physical"), true)
         clickSql(field, field.text.indexOf("physical"))
         UIUtil.dispatchAllInvocationEvents()
-        assertFalse(traceHistoryAction("query.trace.back").isEnabled)
+        assertNoTraceNavigationActions(field)
     }
 
     fun testTracedColumnBackgroundIsReplacedByTableBackgroundAndClearsOnQueryChange() {
@@ -188,7 +179,7 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
         assertTrue(traceHighlights(field).isEmpty())
     }
 
-    fun testControlClickUsesClickedColumnAndHistoryCanGoBackAndForward() {
+    fun testControlClickUsesClickedColumnWithoutRegisteringNavigationActions() {
         val sql = "WITH a AS (SELECT id FROM physical), b AS (SELECT id FROM a) SELECT id FROM b"
         val field = openSql(sql)
         var sourceActions = 0
@@ -206,32 +197,22 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
         val origin = sql.lastIndexOf("id")
         val middle = sql.indexOf("id FROM a")
         val first = sql.indexOf("id FROM physical")
-        assertFalse(traceHistoryAction("query.trace.back").isEnabled)
-        assertFalse(traceHistoryAction("query.trace.forward").isEnabled)
+        assertNoTraceNavigationActions(field)
         field.editor!!.caretModel.moveToOffset(0)
         clickSql(field, origin)
         waitForCaret(field, middle)
         clickSql(field, middle)
         waitForCaret(field, first)
-        traceHistoryAction("query.trace.back").perform()
-        assertEquals(middle, field.editor!!.caretModel.offset)
-        traceHistoryAction("query.trace.back").perform()
-        assertEquals(origin, field.editor!!.caretModel.offset)
-        traceHistoryAction("query.trace.forward").perform()
-        assertEquals(middle, field.editor!!.caretModel.offset)
-        clickSql(field, middle)
-        waitForCaret(field, first)
-        assertFalse(traceHistoryAction("query.trace.forward").isEnabled)
+        assertNoTraceNavigationActions(field)
         assertEquals(sql, field.text)
         assertEquals(before, source.text)
-        assertEquals(3, sourceActions)
+        assertEquals(2, sourceActions)
         assertEquals(0, nativeDeclarations)
         WriteCommandAction.runWriteCommandAction(project) { field.document.insertString(0, " ") }
-        assertFalse(traceHistoryAction("query.trace.back").isEnabled)
-        assertFalse(traceHistoryAction("query.trace.forward").isEnabled)
+        assertNoTraceNavigationActions(field)
     }
 
-    fun testControlClickTableQualifierAndQueryHistoryIsolation() {
+    fun testControlClickTableQualifierAndQuerySwitchDoNotRegisterNavigationActions() {
         val sql = "WITH t AS (SELECT id FROM physical) SELECT a.id FROM t a"
         val field = openSql(sql, secondQuery = true)
         val origin = sql.indexOf("a.id")
@@ -240,35 +221,29 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
         waitForCaret(field, declaration)
         clickSql(field, declaration)
         waitForCaret(field, sql.indexOf("t AS"))
-        assertTrue(traceHistoryAction("query.trace.back").isEnabled)
+        assertNoTraceNavigationActions(field)
         descendants(design!!.component).filterIsInstance<JList<*>>().single { it.name == "query.list" }.selectedIndex = 0
         UIUtil.dispatchAllInvocationEvents()
-        assertFalse(traceHistoryAction("query.trace.back").isEnabled)
-        assertFalse(traceHistoryAction("query.trace.forward").isEnabled)
+        assertNoTraceNavigationActions(field)
         descendants(design!!.component).filterIsInstance<JList<*>>().single { it.name == "query.list" }.selectedIndex = 1
         UIUtil.dispatchAllInvocationEvents()
-        assertTrue(traceHistoryAction("query.trace.back").isEnabled)
-        traceHistoryAction("query.trace.back").perform()
-        assertEquals(declaration, field.editor!!.caretModel.offset)
+        assertNoTraceNavigationActions(field)
     }
 
-    fun testOrdinarySqlClickDoesNotNavigateAndTreeNavigationIsRecorded() {
+    fun testOrdinarySqlClickDoesNotNavigateAndTreeNavigationStillWorks() {
         val sql = "WITH t AS (\n SELECT id FROM physical\n)\nSELECT id FROM t"
         val field = openSql(sql)
         val origin = sql.lastIndexOf("id")
         clickSql(field, origin, false)
         UIUtil.dispatchAllInvocationEvents()
         assertEquals(origin, field.editor!!.caretModel.offset)
-        assertFalse(traceHistoryAction("query.trace.back").isEnabled)
+        assertNoTraceNavigationActions(field)
         waitForTrace(listOf(2, 4))
         val tree = traceTree()
         tree.selectionPath = pathAt(sql.indexOf("id"))
         tree.actionMap.get("trace.navigate").actionPerformed(null)
         assertEquals(sql.indexOf("id"), field.editor!!.caretModel.offset)
-        traceHistoryAction("query.trace.back").perform()
-        assertEquals(origin, field.editor!!.caretModel.offset)
-        traceHistoryAction("query.trace.forward").perform()
-        assertEquals(sql.indexOf("id"), field.editor!!.caretModel.offset)
+        assertNoTraceNavigationActions(field)
     }
 
     fun testControlClickWithMultipleInputsLetsUserChooseSource() {
@@ -290,8 +265,7 @@ class QuerySqlEditorTest : BasePlatformTestCase() {
             list.selectedIndex = 1
             popup.closeOk(null)
             waitForCaret(field, sql.indexOf("x FROM second_table"))
-            traceHistoryAction("query.trace.back").perform()
-            assertEquals(sql.indexOf("x FROM a JOIN"), field.editor!!.caretModel.offset)
+            assertNoTraceNavigationActions(field)
             assertEquals(sql, field.text)
         } finally { if (!popup.isDisposed) popup.cancel() }
     }
