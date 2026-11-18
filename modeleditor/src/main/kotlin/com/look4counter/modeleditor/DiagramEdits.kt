@@ -50,7 +50,9 @@ object DiagramEdits {
                     DiagramPoint(at.x - end.center.x, at.y - end.center.y), bend.weight)
             }
         }
-        val merged = wire.copy(bendpoints = retained)
+        val merged = if (retained.isEmpty() && start.isActivity && end.isActivity)
+            wire.copy(bendpoints = retained, firstRelativePoint = point, explicitContacts = false)
+        else wire.copy(bendpoints = retained)
         val path = DiagramGeometry.path(merged)
         val moved = moveBendpoint(wire, index, point, false)
         return if (withinMergeBand(path[index], path[index + 1], point) &&

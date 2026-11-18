@@ -1663,6 +1663,52 @@ class ModelDiagramTest : BasePlatformTestCase() {
         assertEquals(edited, document.text)
     }
 
+    fun testLastActivityBendpointMergesAtCurrentHorizontalAndVerticalPosition() {
+        for (vertical in listOf(false, true)) {
+            val a = activity(20.0, 40.0)
+            val b = activity(if (vertical) 20.0 else 220.0, if (vertical) 240.0 else 40.0).copy(id = "b")
+            val initial = if (vertical) DiagramPoint(160.0, 170.0) else DiagramPoint(170.0, 110.0)
+            val original = wire(a, b, listOf(DiagramBendpoint(
+                DiagramPoint(initial.x - a.center.x, initial.y - a.center.y),
+                DiagramPoint(initial.x - b.center.x, initial.y - b.center.y), 0.2)))
+                .copy(firstRelativePoint = if (vertical) DiagramPoint(70.0, 70.0) else DiagramPoint(120.0, 55.0))
+            for (coordinate in if (vertical) listOf(28.0, 110.0) else listOf(48.0, 62.0)) {
+                val at = if (vertical) DiagramPoint(coordinate, 170.0) else DiagramPoint(170.0, coordinate)
+                val moved = DiagramEdits.dragBendpoint(original, 0, at)
+                assertEmpty(moved.bendpoints)
+                val path = DiagramGeometry.path(moved)
+                if (vertical) {
+                    assertEquals(coordinate, path.first().x)
+                    assertEquals(coordinate, path.last().x)
+                } else {
+                    assertEquals(coordinate, path.first().y)
+                    assertEquals(coordinate, path.last().y)
+                }
+            }
+        }
+    }
+
+    fun testLastBendpointMergeAtNewHeightPersistsAndUndoes() = withModelEditor(wireFixture(true)) { canvas, source, document, file ->
+        leftDown(canvas, 200, 85)
+        assertEquals(0, canvas.selectedWire!!.index)
+        drag(canvas, 170, 110, 0, -62, MouseEvent.BUTTON1)
+        UIUtil.dispatchAllInvocationEvents()
+        assertEmpty(canvas.selectedWire!!.bendpoints)
+        assertEquals(listOf(DiagramPoint(120.0, 48.0), DiagramPoint(220.0, 48.0)), canvas.wirePath(canvas.selectedWire!!))
+        assertFalse(document.text.contains("<bendpoint"))
+        assertTrue(document.text.contains("custom=\"keep\""))
+        val edited = document.text
+        val undo = com.intellij.openapi.command.undo.UndoManager.getInstance(project)
+        undo.undo(source)
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(wireFixture(true), document.text)
+        undo.redo(source)
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(edited, document.text)
+        FileDocumentManager.getInstance().saveDocument(document)
+        assertEquals(edited, String(file.contentsToByteArray(), Charsets.UTF_8).replace("\r\n", "\n"))
+    }
+
     fun testExistingBendpointMergesAtFivePixelsAndKeepsOtherPoints() {
         val a = state(10.0, 10.0)
         val b = state(110.0, 10.0)
@@ -1708,16 +1754,16 @@ class ModelDiagramTest : BasePlatformTestCase() {
         }
         move(60)
         assertEmpty(canvas.selectedWire!!.bendpoints)
-        move(61)
+        move(68)
         assertEquals(1, canvas.selectedWire!!.bendpoints.size)
-        move(50)
+        move(62)
         assertEmpty(canvas.selectedWire!!.bendpoints)
-        move(49)
+        move(42)
         assertEquals(1, canvas.selectedWire!!.bendpoints.size)
-        move(50)
+        move(48)
         assertEmpty(canvas.selectedWire!!.bendpoints)
         assertEquals(stamp, document.modificationStamp)
-        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, 2, 0, 190, 80, 1, false, MouseEvent.BUTTON1))
+        canvas.dispatchEvent(MouseEvent(canvas, MouseEvent.MOUSE_RELEASED, 2, 0, 190, 78, 1, false, MouseEvent.BUTTON1))
         UIUtil.dispatchAllInvocationEvents()
         assertEmpty(canvas.selectedWire!!.bendpoints)
         assertFalse(document.text.contains("<bendpoint"))

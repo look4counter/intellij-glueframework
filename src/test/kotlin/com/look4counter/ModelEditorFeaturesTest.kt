@@ -179,7 +179,7 @@ class ModelEditorFeaturesTest : BasePlatformTestCase() {
         assertEmpty(canvas.selectedNodes)
     }
 
-    fun testExistingBendpointSnapUsesStartAndEndActivityRanges() {
+    fun testExistingBendpointSnapMergesAtCurrentStraightActivityContact() {
         val a = activity()
         val b = a.copy(id = "2", location = DiagramPoint(20.0, 240.0))
         val bend = DiagramPoint(150.0, 155.0)
@@ -190,9 +190,11 @@ class ModelEditorFeaturesTest : BasePlatformTestCase() {
         mouse(canvas, MouseEvent.MOUSE_RELEASED, 150, 110)
         mouse(canvas, MouseEvent.MOUSE_PRESSED, 150, 155)
         mouse(canvas, MouseEvent.MOUSE_DRAGGED, 142, 165)
-        val point = canvas.wirePath(canvas.diagram.wires.single())[1]
-        assertEquals(150.0, point.x)
-        assertEquals(165.0, point.y)
+        assertEmpty(canvas.diagram.wires.single().bendpoints)
+        val path = canvas.wirePath(canvas.diagram.wires.single())
+        assertEquals(2, path.size)
+        assertEquals(150.0, path.first().x)
+        assertEquals(150.0, path.last().x)
         canvas.cancelDrag()
         assertEquals(wire, canvas.diagram.wires.single())
     }
