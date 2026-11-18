@@ -65,6 +65,91 @@ class ModelActivityCreationTest : BasePlatformTestCase() {
         assertEquals(after, source.editor.document.text)
     }
 
+    private fun connectWire(canvas: ModelDiagramCanvas, release: Boolean = false) {
+        var ancestor: java.awt.Component? = canvas
+        while (ancestor != null) {
+            ancestor.setSize(600, 400)
+            ancestor = ancestor.parent
+        }
+        canvas.setCreationKind(null)
+        canvas.setWireCreationMode(true)
+        send(canvas, MouseEvent.MOUSE_CLICKED, 70, 55)
+        send(canvas, MouseEvent.MOUSE_MOVED, 270, 155)
+        assertNotNull("start: visible=${canvas.visibleRect} nodes=${canvas.diagram.nodes}", canvas.wireCreationPreview)
+        if (release) {
+            send(canvas, MouseEvent.MOUSE_PRESSED, 270, 155)
+            send(canvas, MouseEvent.MOUSE_DRAGGED, 270, 155)
+            send(canvas, MouseEvent.MOUSE_RELEASED, 270, 155)
+        } else {
+            send(canvas, MouseEvent.MOUSE_CLICKED, 270, 155)
+        }
+    }
+
+    fun testUnlockedWireClickAndReleaseSupportSingleUndoRedo() {
+        for (release in listOf(false, true)) withEditor { canvas, source ->
+            val original = source.editor.document.text
+            unlocked {
+                connectWire(canvas, release)
+                assertEquals(original, source.editor.document.text)
+            }
+            UIUtil.dispatchAllInvocationEvents()
+            val wire = canvas.diagram.wires.single()
+            assertEquals("1", wire.start!!.id)
+            assertEquals("2", wire.end!!.id)
+            val after = source.editor.document.text
+            assertTrue(after.contains("output=\"//@wire.0\""))
+            assertTrue(after.contains("input=\"//@wire.0\""))
+            val undo = UndoManager.getInstance(project)
+            undo.undo(source)
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(original, source.editor.document.text)
+            undo.redo(source)
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(after, source.editor.document.text)
+        }
+    }
+
+    fun testDeferredWireCancelledByModeAndReadOnly() {
+        for (readOnly in listOf(false, true)) withEditor { canvas, source ->
+            val original = source.editor.document.text
+            try {
+                unlocked {
+                    connectWire(canvas)
+                    if (readOnly) source.editor.document.setReadOnly(true) else canvas.setWireCreationMode(false)
+                }
+                UIUtil.dispatchAllInvocationEvents()
+                assertEquals(original, source.editor.document.text)
+            } finally { source.editor.document.setReadOnly(false) }
+        }
+    }
+
+    fun testDeferredWireKeepsOriginalStampWhenAnotherGestureStarts() = withEditor { canvas, source ->
+        val original = source.editor.document.text
+        unlocked {
+            connectWire(canvas)
+            com.intellij.openapi.command.WriteCommandAction.runWriteCommandAction(project) {
+                source.editor.document.insertString(source.editor.document.textLength, "\n")
+            }
+            canvas.onMoveStarted?.invoke()
+        }
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(original + "\n", source.editor.document.text)
+        assertTrue(canvas.diagram.wires.isEmpty())
+    }
+
+    fun testDeferredWireDoesNotRunAfterDisposal() {
+        val file = myFixture.addFileToProject("dispose-wire.glue_uml_ad", xml).virtualFile
+        val design = ModelDesignEditorProvider().createEditor(project, file)
+        val canvas = design.component.components.filterIsInstance<JScrollPane>().single().viewport.view as ModelDiagramCanvas
+        canvas.setSize(600, 400)
+        val document = com.intellij.openapi.fileEditor.FileDocumentManager.getInstance().getDocument(file)!!
+        try {
+            unlocked { connectWire(canvas); Disposer.dispose(design) }
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(xml, document.text)
+        } finally { Disposer.dispose(design) }
+    }
+
     fun testUnlockedReleaseCreatesPresetExactlyOnce() = withEditor { canvas, _ ->
         canvas.setCreationKind(DiagramNodeKind.Activity, ActivityPreset("Created preset"))
         send(canvas, MouseEvent.MOUSE_PRESSED, 150, 160)

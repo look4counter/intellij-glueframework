@@ -124,7 +124,7 @@ private class ModelDesignEditor(private val project: Project, private val file: 
         canvas.onWireEditRequested = ::editCondition
         canvas.onActivityEditRequested = ::editActivity
         canvas.onChildCreateRequested = ::createChildImmediately
-        canvas.onWireCreateRequested = ::createWire
+        canvas.onWireCreateRequested = { createWire(it) }
         canvas.onCreationModeChanged = { creationToolbar.refresh() }
         canvas.onWireCreationModeChanged = { creationToolbar.refresh() }
         canvas.activityColor = { node -> ModelEditorSettings.getInstance(project).colorForClass(node.className) }
@@ -152,7 +152,7 @@ private class ModelDesignEditor(private val project: Project, private val file: 
             override fun isPasteEnabled(context: DataContext) = !disposed && !scheduled && !canvas.isDragging && canvas.creationKind == null && !canvas.wireCreationMode &&
                 canEditStructure() && isPastePossible(context)
             override fun performPaste(context: DataContext) {
-                if (isPasteEnabled(context)) DiagramClipboard.read()?.let(::pasteSelection)
+                if (isPasteEnabled(context)) DiagramClipboard.read()?.let { pasteSelection(it) }
             }
         }
         canvas.deleteProvider = object : DeleteProvider {
@@ -431,10 +431,12 @@ private class ModelDesignEditor(private val project: Project, private val file: 
         creationTrace.record("CREATE_DONE", "$context nodeId=$id kind=$kind modelX=${location.x} modelY=${location.y}")
     }
 
-    private fun createWire(draft: DiagramWire) {
+    private fun createWire(draft: DiagramWire, expectedStamp: Long = moveStamp) {
+        if (disposed || project.isDisposed || !file.isValid) return
+        if (deferModelEdit { createWire(draft, expectedStamp) }) return
         if (!canEditStructure()) return
         val source = document ?: return
-        if (!canEditDocument() || scheduled || !canvas.wireCreationMode || source.modificationStamp != moveStamp) { refresh(); return }
+        if (!canEditDocument() || scheduled || !canvas.wireCreationMode || source.modificationStamp != expectedStamp) { refresh(); return }
         PsiDocumentManager.getInstance(project).commitDocument(source)
         val xml = modelXml() ?: return
         val root = xml.rootTag ?: return
@@ -472,7 +474,13 @@ private class ModelDesignEditor(private val project: Project, private val file: 
         canvas.selectWireByIndex(index)
     }
 
-    private fun deleteSelection() {
+    private fun deleteSelection(expectedStamp: Long = document?.modificationStamp ?: -1L,
+                                expectedNodes: Set<DiagramNode> = canvas.selectedNodes.toSet(),
+                                expectedWire: DiagramWire? = canvas.selectedWire) {
+        if (disposed || project.isDisposed || !file.isValid) return
+        if (deferModelEdit { deleteSelection(expectedStamp, expectedNodes, expectedWire) }) return
+        if (document?.modificationStamp != expectedStamp || canvas.selectedNodes.toSet() != expectedNodes ||
+            canvas.selectedWire != expectedWire || canvas.deleteProvider?.canDeleteElement(DataContext.EMPTY_CONTEXT) != true) return
         if (!canEditStructure()) return
         val source = document ?: return
         PsiDocumentManager.getInstance(project).commitDocument(source)
@@ -521,7 +529,13 @@ private class ModelDesignEditor(private val project: Project, private val file: 
         refresh(preserveOrigin = true)
     }
 
-    private fun copySelection() {
+    private fun copySelection(expectedStamp: Long = document?.modificationStamp ?: -1L,
+                              expectedNodes: Set<DiagramNode> = canvas.selectedNodes.toSet(),
+                              expectedWire: DiagramWire? = canvas.selectedWire) {
+        if (disposed || project.isDisposed || !file.isValid) return
+        if (deferModelEdit { copySelection(expectedStamp, expectedNodes, expectedWire) }) return
+        if (document?.modificationStamp != expectedStamp || canvas.selectedNodes.toSet() != expectedNodes ||
+            canvas.selectedWire != expectedWire || canvas.copyProvider?.isCopyEnabled(DataContext.EMPTY_CONTEXT) != true) return
         val source = document ?: return
         PsiDocumentManager.getInstance(project).commitDocument(source)
         val xml = modelXml() ?: return
@@ -546,7 +560,11 @@ private class ModelDesignEditor(private val project: Project, private val file: 
         DiagramClipboard.write(DiagramClipboardData(children, wires, namespaces, canvas.screenOffset, canvas.zoom))
     }
 
-    private fun pasteSelection(data: DiagramClipboardData) {
+    private fun pasteSelection(data: DiagramClipboardData, expectedStamp: Long = document?.modificationStamp ?: -1L) {
+        if (disposed || project.isDisposed || !file.isValid) return
+        if (deferModelEdit { pasteSelection(data, expectedStamp) }) return
+        if (document?.modificationStamp != expectedStamp || DiagramClipboard.read() !== data ||
+            canvas.pasteProvider?.isPasteEnabled(DataContext.EMPTY_CONTEXT) != true) return
         if (!canEditStructure()) return
         val source = document ?: return
         PsiDocumentManager.getInstance(project).commitDocument(source)

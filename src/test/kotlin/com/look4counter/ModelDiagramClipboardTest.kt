@@ -27,6 +27,127 @@ import java.awt.event.MouseEvent
 import javax.swing.JScrollPane
 
 class ModelDiagramClipboardTest : BasePlatformTestCase() {
+    private fun unlocked(action: () -> Unit) {
+        val app = com.intellij.openapi.application.ApplicationManager.getApplication() as com.intellij.openapi.application.impl.ApplicationImpl
+        app.threadingSupport.releaseTheAcquiredWriteIntentLockThenExecuteActionAndTakeWriteIntentLockBack {
+            assertFalse(app.isWriteIntentLockAcquired)
+            action()
+        }
+    }
+
+    private fun request(canvas: ModelDiagramCanvas, operation: String) {
+        when (operation) {
+            "copy" -> canvas.copyProvider!!.performCopy(DataContext.EMPTY_CONTEXT)
+            "paste" -> canvas.pasteProvider!!.performPaste(DataContext.EMPTY_CONTEXT)
+            "delete" -> canvas.deleteProvider!!.deleteElement(DataContext.EMPTY_CONTEXT)
+        }
+    }
+
+    fun testUnlockedClipboardOperationsAndSingleUndo() {
+        val session = open()
+        click(session.canvas, 70, 55)
+        val original = session.document.text
+        unlocked { request(session.canvas, "copy") }
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(listOf("2"), DiagramClipboard.read()!!.children.map { it.node.id })
+        assertEquals(original, session.document.text)
+        for (operation in listOf("paste", "delete")) {
+            unlocked {
+                request(session.canvas, operation)
+                assertEquals(original, session.document.text)
+            }
+            UIUtil.dispatchAllInvocationEvents()
+            assertTrue(original != session.document.text)
+            val edited = session.document.text
+            UndoManager.getInstance(project).undo(session.source)
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(original, session.document.text)
+            UndoManager.getInstance(project).redo(session.source)
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(edited, session.document.text)
+            UndoManager.getInstance(project).undo(session.source)
+            UIUtil.dispatchAllInvocationEvents()
+            session.canvas.selectNodesByIds(setOf("2"))
+        }
+    }
+
+    fun testDeferredCopyAndDeleteCancelWhenSelectionChanges() {
+        for (operation in listOf("copy", "delete")) {
+            val session = open()
+            click(session.canvas, 70, 55)
+            copy(session.canvas)
+            val clipboard = DiagramClipboard.read()
+            val original = session.document.text
+            unlocked {
+                request(session.canvas, operation)
+                session.canvas.selectNodesByIds(setOf("9"))
+            }
+            UIUtil.dispatchAllInvocationEvents()
+            assertEquals(original, session.document.text)
+            assertSame(clipboard, DiagramClipboard.read())
+        }
+    }
+
+    fun testDeferredClipboardOperationsCancelOnDocumentModeAndDisposalChanges() {
+        for (operation in listOf("copy", "paste", "delete")) {
+            for (change in listOf("document", "mode", "dispose")) {
+                val session = open()
+                click(session.canvas, 70, 55)
+                copy(session.canvas)
+                val clipboard = DiagramClipboard.read()
+                val original = session.document.text
+                unlocked {
+                    request(session.canvas, operation)
+                    when (change) {
+                        "document" -> WriteCommandAction.runWriteCommandAction(project) {
+                            session.document.insertString(session.document.textLength, "\n")
+                        }
+                        "mode" -> session.canvas.setWireCreationMode(true)
+                        "dispose" -> Disposer.dispose(session.editor)
+                    }
+                }
+                UIUtil.dispatchAllInvocationEvents()
+                assertEquals(original + if (change == "document") "\n" else "", session.document.text)
+                assertSame(clipboard, DiagramClipboard.read())
+            }
+        }
+    }
+
+    fun testDeferredPasteRejectsReplacedClipboard() {
+        val session = open()
+        click(session.canvas, 70, 55)
+        copy(session.canvas)
+        val original = session.document.text
+        unlocked {
+            request(session.canvas, "paste")
+            com.intellij.openapi.ide.CopyPasteManager.getInstance().setContents(StringSelection("replacement"))
+        }
+        UIUtil.dispatchAllInvocationEvents()
+        assertEquals(original, session.document.text)
+    }
+
+    fun testDeferredReadOnlyRejectsWritesButAllowsCopy() {
+        for (operation in listOf("copy", "paste", "delete")) {
+            val session = open()
+            click(session.canvas, 70, 55)
+            copy(session.canvas)
+            val clipboard = DiagramClipboard.read()
+            val original = session.document.text
+            try {
+                unlocked {
+                    request(session.canvas, operation)
+                    session.document.setReadOnly(true)
+                }
+                UIUtil.dispatchAllInvocationEvents()
+                assertEquals(original, session.document.text)
+                if (operation == "copy") {
+                    assertTrue(clipboard !== DiagramClipboard.read())
+                    assertEquals(listOf("2"), DiagramClipboard.read()!!.children.map { it.node.id })
+                } else assertSame(clipboard, DiagramClipboard.read())
+            } finally { session.document.setReadOnly(false) }
+        }
+    }
+
     fun testPastePossibleIsDisabledDuringPanningAndRestoredOnRelease() {
         val session = open()
         session.canvas.setSize(600, 400)
